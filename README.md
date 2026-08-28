@@ -116,6 +116,7 @@ weft merge                                  # reconcile with another machine
 weft carry                                  # what exists on this disk and nowhere else
 weft land                                   # apply another machine's uncommitted work
 weft tui                                    # full screen: what wants attention, settle conflicts
+weft up                                     # update weft itself
 ```
 
 On a second machine, carry the key over first:
@@ -383,7 +384,7 @@ teaches people to reach for a bypass, and then it protects nothing.
 - [x] Three-way merge with format-aware drivers
 - [x] Uncommitted work capture and transfer
 - [x] TUI
-- [ ] Self-update
+- [x] Self-update
 
 ## Contributing
 

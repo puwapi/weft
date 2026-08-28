@@ -2,6 +2,7 @@ using System.CommandLine;
 using Spectre.Console;
 using Weft.Cli.Commands;
 using Weft.Cli.Tui;
+using Weft.Core.Release;
 
 namespace Weft.Cli;
 
@@ -9,6 +10,11 @@ internal static class Program
 {
     private static async Task<int> Main(string[] args)
     {
+        // Windows cannot delete a running executable, so an update leaves the
+        // previous binary beside the new one and the next process clears it.
+        // Silent by design: it is bookkeeping, not news.
+        if (Environment.ProcessPath is { } self) BinarySwap.CleanupLeftovers(self);
+
         var root = new Option<string?>("--root", "-C")
         {
             Description = "Workspace directory. Defaults to the nearest ancestor holding a .weft directory.",
@@ -153,9 +159,19 @@ internal static class Program
         var tui = new Command("tui", "Full-screen view: what wants attention, and settle conflicts side by side.") { tuiRoot };
         tui.SetAction((pr, ct) => TuiApp.RunAsync(pr.GetValue(tuiRoot), ct));
 
+        // ---- up ----
+        var checkOnly = new Option<bool>("--check") { Description = "Say what is available and change nothing." };
+        var upForce = new Option<bool>("--force") { Description = "Install the published version even if this one is the same or newer." };
+
+        var up = new Command("up", "Update weft itself. The download is always checked against its published checksum.")
+        {
+            checkOnly, upForce,
+        };
+        up.SetAction((pr, ct) => UpCommand.RunAsync(pr.GetValue(checkOnly), pr.GetValue(upForce), ct));
+
         var app = new RootCommand("weft: keep a monorepo of many git repositories in step across machines.")
         {
-            init, scan, snapshot, key, remote, push, pull, merge, carry, land, tui,
+            init, scan, snapshot, key, remote, push, pull, merge, carry, land, tui, up,
         };
 
         try

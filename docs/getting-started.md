@@ -143,7 +143,11 @@ docker run -d --name weft-server \
   ghcr.io/puwapi/weft-server:latest
 ```
 
-or, if you prefer a compose file:
+If that says `denied` or `not found`, the package is private: make it public once
+from the repository's Packages page, or use the compose file below, which builds
+from source when it cannot pull.
+
+Or, if you prefer a compose file:
 
 ```bash
 curl -fsSLO https://raw.githubusercontent.com/puwapi/weft/main/docker-compose.yml
@@ -293,6 +297,35 @@ anything. It is never automatic: applying a patch to a working tree on its own i
 how you destroy whatever was going on there.
 
 ---
+
+## Keeping weft current
+
+```bash
+weft up --check     # what is published, changes nothing
+weft up             # install it
+```
+
+The download is **always** checked against the checksum published beside it, and
+there is no flag to skip that. This replaces the binary you run; a download nobody
+checked is a way to hand somebody else's code the same trust.
+
+Nothing happens if you are already current, and nothing happens if your build is
+newer than what is published, which is what a build from source usually is.
+`--force` overrides both.
+
+The server refuses **writes** from a build below its floor, and says so:
+
+```
+This server accepts writes from weft 0.3.0 or later; you are running 0.2.1.
+Run 'weft up'.
+```
+
+Reads are never blocked. Stranding an outdated machine with no way to fetch its
+own work is a worse problem than letting it run stale.
+
+> On Windows the previous binary cannot be deleted while it is running, so it is
+> moved aside and removed the next time weft starts. That is why an update there
+> leaves a file behind for a moment.
 
 ## Platform notes
 
