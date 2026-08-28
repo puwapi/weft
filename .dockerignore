@@ -1,0 +1,21 @@
+# Without this, the build context carries bin/ and obj/ from whatever machine ran
+# the last local build, and 'dotnet publish' inside the container trips over
+# artefacts that reference paths from another operating system.
+**/bin/
+**/obj/
+publish/
+publish-server/
+
+.git/
+.github/
+.vs/
+.idea/
+
+tests/
+docs/
+scripts/
+*.md
+LICENSE
+
+.env
+.weft/

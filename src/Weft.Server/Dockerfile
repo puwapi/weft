@@ -20,11 +20,18 @@ ENV Weft__DataDir=/data
 ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
-# Non-root, and the volume is chowned so the server can actually write to it.
-# A container that starts as root and then cannot write is the more confusing
-# failure, because it looks healthy until the first push.
-RUN adduser -D -u 1654 weft && mkdir -p /data && chown -R weft:weft /data /app
-USER weft
+# The .NET runtime images already ship a non-root user at UID 1654 and export it
+# as APP_UID. Creating one is not merely redundant: adduser fails on the
+# collision, and the whole image build with it.
+#
+# The volume is chowned so the server can actually write to it. A container that
+# starts unprivileged and then cannot write is the more confusing failure,
+# because it looks healthy until the first push.
+# Defaulted rather than assumed: the value comes from the base image, and a
+# Dockerfile that breaks silently when a future tag stops exporting it would
+# leave the server running as root with nothing to say so.
+RUN mkdir -p /data && chown -R "${APP_UID:-1654}" /data /app
+USER ${APP_UID:-1654}
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
   CMD wget -qO- http://127.0.0.1:8080/health || exit 1
