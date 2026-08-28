@@ -327,6 +327,9 @@ own work is a worse problem than letting it run stale.
 > moved aside and removed the next time weft starts. That is why an update there
 > leaves a file behind for a moment.
 
+`weft up` exists from **0.4.0** onward. A 0.3.x build has no such command and does
+not grow one by itself: run the installer again to get past it, once.
+
 ## Platform notes
 
 Everything works the same on all three, with four differences worth knowing.
