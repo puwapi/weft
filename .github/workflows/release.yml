@@ -15,11 +15,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # NativeAOT cannot cross-compile, so there is one runner per target.
-          # That is the price of a binary with no runtime to install, and it is
-          # the right trade for a tool people are asked to put on three machines.
+          # NativeAOT cannot cross-compile between OPERATING SYSTEMS, so there is
+          # one runner per OS. It does cross ARCHITECTURES within one: an arm64
+          # Mac produces a working x86_64 binary, verified by running it. That is
+          # worth knowing, because macos-13 is a scarce runner and waiting for one
+          # held up an entire release for no reason.
           - { os: macos-latest,     rid: osx-arm64,   name: weft-macos-arm64 }
-          - { os: macos-13,         rid: osx-x64,     name: weft-macos-x64 }
+          - { os: macos-latest,     rid: osx-x64,     name: weft-macos-x64 }
           - { os: ubuntu-latest,    rid: linux-x64,   name: weft-linux-x64 }
           - { os: ubuntu-24.04-arm, rid: linux-arm64, name: weft-linux-arm64 }
           - { os: windows-latest,   rid: win-x64,     name: weft-windows-x64 }

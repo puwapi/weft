@@ -98,8 +98,10 @@ dotnet publish src/Weft.Cli -c Release -o ./publish
 ./publish/weft --help
 ```
 
-Requires [.NET 10](https://dotnet.microsoft.com/download). NativeAOT cannot
-cross-compile, so a binary must be built on the system it runs on.
+Requires [.NET 10](https://dotnet.microsoft.com/download). NativeAOT cannot cross
+compile between operating systems, so a binary must be built on the OS it runs on.
+It does cross architectures within one: an arm64 Mac builds a working x86_64
+binary.
 
 ## Use
 
