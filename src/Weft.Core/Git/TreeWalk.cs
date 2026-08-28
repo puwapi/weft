@@ -101,6 +101,15 @@ public sealed class TreeWalk
                 // Found by running two snapshots in a row, not by reading.
                 if (rel.Length == 0 && e.Name == Workspace.WeftRoot.MetaDir) continue;
 
+                // Companion files a pending merge left beside a conflict, and the
+                // temp files a write is using. Skipped structurally rather than by
+                // a rule: snapshotting them would record the other machine's
+                // version as a new file of our own, and pushing that would send
+                // the conflict to everybody.
+                if (e.Name.EndsWith(Merge.MergeApplier.TheirsSuffix, StringComparison.Ordinal)
+                    || e.Name.EndsWith(Merge.MergeApplier.BaseSuffix, StringComparison.Ordinal)
+                    || e.Name.EndsWith(".weft-tmp", StringComparison.Ordinal)) continue;
+
                 var child = rel.Length == 0 ? e.Name : $"{rel}/{e.Name}";
 
                 // A symlinked directory is recorded as a file entry and never

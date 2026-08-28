@@ -241,11 +241,34 @@ Where line-based diff3 is bad and structure does better:
 ### Level 4: real conflicts
 
 Genuinely overlapping hunks, diverging binaries, delete-versus-modify. No
-heuristic is honest here, so weft asks. Both versions are materialised, the TUI
-shows them side by side.
+heuristic is honest here, so weft asks.
+
+**No conflict markers are written into the file.** The file is left exactly as it
+was, still holding this machine's version and still valid for every tool that
+reads it; the other version and the common ancestor are written beside it as
+`<file>.weft-theirs` and `<file>.weft-base`. Deleting the companion is how a
+person says the decision is made, which is a fact on disk rather than a flag
+someone has to remember to set.
 
 > **The working tree is not touched until the conflict is resolved.** A
 > half-merged file on disk is worse than no file: it looks finished.
+
+The plan is computed in full before anything is applied, which is what makes that
+rule enforceable. A merge that wrote as it went would leave half a merge behind
+the moment it met a conflict.
+
+### Convergence
+
+A settled conflict is recorded as a snapshot with **both** heads as parents. That
+snapshot becomes the new common ancestor, so the disagreement is settled rather
+than merely answered once. Without it the next merge finds the same ancestor, sees
+the same two divergent versions, and asks again, forever.
+
+The same requirement drives one rule that looks cosmetic and is not: when both
+machines appended to a document and both appends are kept, they are **ordered by
+content, never by which machine is asking**. Ordering by "ours first" makes each
+machine produce a different file from the same inputs, and they conflict again on
+the next round.
 
 ### Level 5: git state does not merge like content
 

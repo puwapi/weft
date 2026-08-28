@@ -80,9 +80,23 @@ internal static class Program
         var pull = new Command("pull", "Fetch what other machines have recorded. Writes nothing into your working tree.") { pullRoot };
         pull.SetAction((pr, ct) => RemoteCommands.PullAsync(pr.GetValue(pullRoot), ct));
 
+        // ---- merge ----
+        var mergeRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
+        var from = new Option<string?>("--from") { Description = "Which machine to merge with, by name." };
+        var cont = new Option<bool>("--continue") { Description = "Finish a merge whose conflicts you have settled." };
+        var abort = new Option<bool>("--abort") { Description = "Drop a pending merge. Files already merged cleanly are left as they are." };
+
+        var merge = new Command("merge",
+            "Reconcile this machine with another. Uses what 'weft pull' fetched; needs no network.")
+        {
+            mergeRoot, from, cont, abort,
+        };
+        merge.SetAction((pr, ct) => MergeCommand.RunAsync(
+            pr.GetValue(mergeRoot), pr.GetValue(from), pr.GetValue(cont), pr.GetValue(abort), ct));
+
         var app = new RootCommand("weft: keep a monorepo of many git repositories in step across machines.")
         {
-            init, scan, snapshot, key, remote, push, pull,
+            init, scan, snapshot, key, remote, push, pull, merge,
         };
 
         try

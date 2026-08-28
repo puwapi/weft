@@ -79,6 +79,7 @@ weft snapshot                               # record the state of the workspace
 weft remote add https://weft.example --join <secret>
 weft push                                   # send the latest snapshot
 weft pull                                   # fetch what other machines recorded
+weft merge                                  # reconcile with another machine
 ```
 
 On a second machine, carry the key over first:
@@ -135,6 +136,66 @@ scripts/probe-server.sh <url> <join-secret> <token-a> <token-b>
 Those are the behaviours a well-behaved client never exercises, which is why they
 are probed over HTTP rather than left to unit tests.
 
+## Merging
+
+`weft pull` fetches; `weft merge` reconciles. Keeping them apart means a merge
+cannot half-finish because a connection dropped, and it can be run on a train.
+
+Most differences never reach you. weft holds the snapshot both machines started
+from, so it can tell "they added a line" from "I deleted one", which a two-way
+synchroniser cannot. Changes to different parts of a file are both applied.
+The same change made twice is not a disagreement.
+
+Two cases resolve that a line merge alone would refuse, and weft says so rather
+than resolving them silently:
+
+- **Both machines appended to the same document.** As lines that is a conflict,
+  because the order of two insertions at one point cannot be inferred. As an
+  edit it is not: neither side touched what the other relies on, so both are
+  kept, ordered by content so that **both machines produce the same file**.
+  Ordering by "mine first" would give each machine a different result and they
+  would conflict again forever.
+- **Both added different keys to the same JSON object.** Conflicts as text,
+  merges exactly as data.
+
+A line merge always runs first, even on JSON, because it keeps the file as it was
+written: its key order, its indentation, its comments. Structure is the fallback,
+reached only when the line merge fails, which is precisely when it helps.
+
+### When it genuinely cannot decide
+
+**No conflict markers are ever written into your file.** A file carrying `<<<<<<<`
+is broken for every tool that reads it, and if nobody notices it stays broken.
+
+Instead the file is left exactly as it was, still holding your version and still
+working, and the other version is written beside it:
+
+```
+notes.md               your version, untouched
+notes.md.weft-theirs   the other machine's
+notes.md.weft-base     what you both started from
+```
+
+Edit until you are happy, delete the `.weft-theirs` companion to say so, then:
+
+```
+weft merge --continue
+```
+
+That records a snapshot with **both** heads as parents, which makes it the new
+common ancestor. Without it the next merge would find the same ancestor, see the
+same two versions, and ask you the same question forever.
+
+### What merging does not touch
+
+Repository state is reported and never merged. Two machines on two branches is
+not a disagreement, and cloning a repository that exists only on the other machine
+is a decision, not a consequence.
+
+The merge cannot reach into a git working tree at all: the walk stops at every
+repository, so no checkout is ever in a manifest, and there is no code path that
+could write into one.
+
 ## Rules
 
 Two files, for two unrelated reasons. Merging them is a mistake.
@@ -163,7 +224,7 @@ them, and every reclassification is reported so you can move it back.
 - [x] Snapshots and incremental manifests
 - [x] Client-side encryption that keeps deduplication
 - [x] Server, sync protocol, push and pull
-- [ ] Three-way merge with format-aware drivers
+- [x] Three-way merge with format-aware drivers
 - [ ] Uncommitted work capture and transfer
 - [ ] TUI
 - [ ] Self-update

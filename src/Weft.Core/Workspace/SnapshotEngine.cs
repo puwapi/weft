@@ -43,8 +43,17 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
     /// pointer. Snapshotting must always be safe to run, including while a build
     /// is writing, which is why an unreadable file is skipped rather than fatal.
     /// </remarks>
+    /// <param name="extraParents">
+    /// Additional parents, used to record a merge.
+    /// </param>
+    /// <remarks>
+    /// A merge snapshot carrying BOTH heads is what stops a resolved conflict from
+    /// coming back. Without it the next merge finds the same common ancestor, sees
+    /// the same two divergent versions, and asks the same question again, forever.
+    /// </remarks>
     public async Task<SnapshotResult> CreateAsync(
-        MachineIdentity machine, int maxParallel = 8, CancellationToken ct = default)
+        MachineIdentity machine, int maxParallel = 8,
+        IReadOnlyList<ChunkId>? extraParents = null, CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
 
@@ -121,8 +130,13 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
         // Nothing moved and no repository changed: recording a snapshot would add
         // a node to the graph carrying no information, and a machine left running
         // would fill the history with them.
+        var merging = extraParents is { Count: > 0 };
         var reposUnchanged = parentId is not null && SameRepos(LoadSnapshot(parentId.Value).Repos, repoStates);
-        if (diff.IsEmpty && reposUnchanged)
+
+        // A merge is always recorded, even when it changed no file. The snapshot
+        // exists to say "these two histories are now one", and skipping it because
+        // nothing moved would leave the two heads forever divergent.
+        if (!merging && diff.IsEmpty && reposUnchanged)
         {
             return new SnapshotResult
             {
@@ -143,7 +157,7 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
         {
             ManifestId = ChunkId.Of(manifestBytes),
             ManifestChunks = manifestChunks,
-            Parents = parentId is null ? [] : [parentId.Value],
+            Parents = BuildParents(parentId, extraParents),
             MachineId = machine.Id,
             MachineName = machine.Name,
             CreatedUtc = DateTimeOffset.UtcNow,
@@ -169,6 +183,17 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
             ElapsedMs = sw.ElapsedMilliseconds,
             NoChange = false,
         };
+    }
+
+    private static IReadOnlyList<ChunkId> BuildParents(ChunkId? head, IReadOnlyList<ChunkId>? extra)
+    {
+        var parents = new List<ChunkId>();
+        if (head is not null) parents.Add(head.Value);
+
+        foreach (var p in extra ?? [])
+            if (!parents.Contains(p)) parents.Add(p);
+
+        return parents;
     }
 
     public Snapshot LoadSnapshot(ChunkId id) => Snapshot.Parse(store.Get(id));

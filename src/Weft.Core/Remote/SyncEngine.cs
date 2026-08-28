@@ -125,6 +125,12 @@ public sealed class SyncEngine(
             fetched.Add((h, localId, snapshot));
         }
 
+        // Recorded now, while both names of each snapshot are in hand. A merge
+        // afterwards needs no network.
+        new RefStore(root.MetaPath).WriteRemoteHeads(
+            fetched.Select(f => new RemoteHead(
+                f.Item1.MachineId, f.Item1.MachineName, f.Item2.ToString(), DateTimeOffset.UtcNow)).ToList());
+
         return new PullResult
         {
             Heads = heads,
