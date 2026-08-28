@@ -10,6 +10,16 @@ RUN dotnet publish src/Weft.Server/Weft.Server.csproj -c Release -o /app
 
 # Run
 FROM mcr.microsoft.com/dotnet/aspnet:10.0-alpine
+
+# Links the package to the repository it came from. Without the source label the
+# package stands alone: it does not appear beside the repository, its README is
+# not shown, and the setting that lets it inherit the repository's visibility is
+# not offered at all.
+LABEL org.opencontainers.image.source="https://github.com/puwapi/weft" \
+      org.opencontainers.image.description="weft server: encrypted object store and machine registry" \
+      org.opencontainers.image.licenses="Apache-2.0" \
+      org.opencontainers.image.title="weft-server"
+
 WORKDIR /app
 COPY --from=build /app ./
 

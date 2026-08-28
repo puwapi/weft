@@ -143,9 +143,15 @@ docker run -d --name weft-server \
   ghcr.io/puwapi/weft-server:latest
 ```
 
-If that says `denied` or `not found`, the package is private: make it public once
-from the repository's Packages page, or use the compose file below, which builds
-from source when it cannot pull.
+If that says `denied`, the package is still private. A container package is
+created private even when its repository is public, and GitHub's API offers no way
+to change that: it is one switch in the web interface, once.
+
+> Repository → **Packages** → **weft-server** → **Package settings** →
+> **Change visibility** → Public.
+
+Until then the compose file below works: it builds from source when it cannot
+pull.
 
 Or, if you prefer a compose file:
 
