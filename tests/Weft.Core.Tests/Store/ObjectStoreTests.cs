@@ -1,6 +1,8 @@
 using System.Text;
 using Weft.Core.Store;
 
+using Weft.Core.Tests.Support;
+
 namespace Weft.Core.Tests.Store;
 
 public sealed class ObjectStoreTests : IDisposable
@@ -12,7 +14,7 @@ public sealed class ObjectStoreTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+        TempTree.Remove(_dir);
     }
 
     private static byte[] Text(string s) => Encoding.UTF8.GetBytes(s);

@@ -18,7 +18,11 @@ public sealed class ServerStoreTests : IDisposable
         // every test in the class.
         SqliteConnection.ClearAllPools();
 
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+        // Both exception types: Windows raises UnauthorizedAccessException on a
+        // read-only file where Unix raises nothing at all, so catching only
+        // IOException leaves a directory per test behind on one platform.
+        try { Directory.Delete(_dir, recursive: true); }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
     }
 
     private static Stream Body(string s) => new MemoryStream(Encoding.UTF8.GetBytes(s));

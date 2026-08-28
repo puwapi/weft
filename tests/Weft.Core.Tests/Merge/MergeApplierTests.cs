@@ -4,6 +4,8 @@ using Weft.Core.Merge;
 using Weft.Core.Store;
 using Weft.Core.Workspace;
 
+using Weft.Core.Tests.Support;
+
 namespace Weft.Core.Tests.Merge;
 
 public sealed class MergeApplierTests : IDisposable
@@ -26,7 +28,7 @@ public sealed class MergeApplierTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+        TempTree.Remove(_dir);
     }
 
     private static byte[] B(string s) => Encoding.UTF8.GetBytes(s);

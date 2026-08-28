@@ -1,6 +1,8 @@
 using System.Text;
 using Weft.Core.Git;
 
+using Weft.Core.Tests.Support;
+
 namespace Weft.Core.Tests.Git;
 
 /// <summary>Exercises real git repositories, because the whole point is that git decides.</summary>
@@ -18,7 +20,7 @@ public sealed class WorkCaptureTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+        TempTree.Remove(_dir);
     }
 
     private async Task<string> RepoAsync(string name)

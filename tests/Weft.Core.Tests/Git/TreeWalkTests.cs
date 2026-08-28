@@ -2,6 +2,8 @@ using Weft.Core.Git;
 using Weft.Core.Ignore;
 using Weft.Core.Workspace;
 
+using Weft.Core.Tests.Support;
+
 namespace Weft.Core.Tests.Git;
 
 public sealed class TreeWalkTests : IDisposable
@@ -12,7 +14,7 @@ public sealed class TreeWalkTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_root, recursive: true); } catch (IOException) { }
+        TempTree.Remove(_root);
     }
 
     private void File_(string relative, string content = "x")

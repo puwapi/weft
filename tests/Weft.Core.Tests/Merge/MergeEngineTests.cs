@@ -2,6 +2,8 @@ using System.Text;
 using Weft.Core.Merge;
 using Weft.Core.Store;
 
+using Weft.Core.Tests.Support;
+
 namespace Weft.Core.Tests.Merge;
 
 public sealed class MergeEngineTests : IDisposable
@@ -18,7 +20,7 @@ public sealed class MergeEngineTests : IDisposable
 
     public void Dispose()
     {
-        try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
+        TempTree.Remove(_dir);
     }
 
     /// <summary>Builds a snapshot holding these files, descending from these parents.</summary>
