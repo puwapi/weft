@@ -26,13 +26,14 @@ The reference workload this was built against: **49 git repositories, 54 GB on
 disk, 1.8 million files, of which 43 000 files (~1.5 GB) are actual content.**
 97% of the tree is regenerable (`node_modules`, build output, package caches).
 
-Two incidents motivated it, both real:
+Two failure modes motivated it, both observed in the wild:
 
-1. A complete feature branch, 6 475 lines across 34 files, existed on exactly one
-   disk with no remote. Documentation described it as shipped. A failed drive
-   would have erased it silently.
-2. A deploy script rsync'd a *working tree* rather than a commit, pushing four
-   uncommitted files to production and taking down authentication.
+1. A complete feature branch, thousands of lines across dozens of files, living
+   on exactly one disk with no remote. The notes described it as shipped. A dead
+   drive would have erased it with nothing to show it had ever existed.
+2. A deployment that ships a *working tree* rather than a commit, so uncommitted
+   local edits reach a server without ever having been reviewed, and without the
+   history recording that they went out.
 
 Both are the same failure: **work that exists in one place and nothing knows it.**
 
