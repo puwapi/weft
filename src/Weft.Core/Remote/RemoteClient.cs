@@ -70,6 +70,21 @@ public sealed class RemoteClient : IDisposable
     }
 
     /// <summary>
+    /// Withdraws a machine's token.
+    /// </summary>
+    /// <remarks>
+    /// Carries the join secret, not this machine's token, so it works from any
+    /// machine the operator can reach the server from, including a freshly
+    /// installed one that has never enrolled.
+    /// </remarks>
+    public async Task RevokeAsync(string machineId, string joinSecret, CancellationToken ct = default)
+    {
+        using var r = await _http.PostAsJsonAsync($"{_base}/v1/machines/{Uri.EscapeDataString(machineId)}/revoke",
+            new RevokeRequest(joinSecret), WireJson.Default.RevokeRequest, ct).ConfigureAwait(false);
+        await ThrowIfFailedAsync(r, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// Asks which of these the server lacks.
     /// </summary>
     /// <remarks>

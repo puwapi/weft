@@ -16,6 +16,10 @@ services:
       # Machines present this once, at 'weft remote add'. It is not a session
       # credential: each machine gets its own token in exchange, and that token
       # is what every later request carries.
+      #
+      # It also authenticates 'weft remote revoke'. That is deliberate: a client
+      # never stores this, so a machine that was lost cannot use it to revoke the
+      # machines you still have.
       Weft__JoinSecret: "${WEFT_JOIN_SECRET:?set WEFT_JOIN_SECRET, the server will not start without it}"
 
       # Oldest build allowed to WRITE. Reads are never version-gated: blocking

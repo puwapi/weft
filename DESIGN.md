@@ -311,6 +311,55 @@ Additionally:
 - A **secret scanner** runs on candidate content (private key headers, live API
   key prefixes, connection strings). A hit **blocks the snapshot** and names the
   file rather than warning and continuing.
+
+It runs on **both** things a snapshot records: loose files and the patches of
+uncommitted work. Neither is covered by the other. A path rule cannot help with a
+key pasted into a source file while debugging, because that path is one nobody
+would have listed; and the patch scan cannot help with a note sitting outside
+every repository. Both sets of findings are reported together, so a single
+snapshot is fixed once rather than refused three times in a row.
+
+The scan runs only on content the object store does not already hold. That keeps
+a snapshot of an unchanged tree from re-reading every line of it, and the
+consequence is worth stating plainly: content already stored is not scanned again,
+because it is already on the server and refusing it now would cost the snapshot
+without taking anything back. It reads whole files, never chunk by chunk, because
+a key straddling a chunk boundary is invisible to both halves.
+
+### Transport
+
+The remote is not a trust boundary, but the credentials that reach it are not
+covered by the encryption. Two things travel in the clear over plain HTTP: the
+join secret, which buys enrolment, and the bearer token every later request
+carries. Either one lets a stranger enrol, download every object and fill the
+disk. They still cannot read anything.
+
+`weft remote add` therefore refuses `http://` to anything but a loopback address,
+and the refusal says exactly that, including the half that is safe. A refusal that
+overstates the danger is bypassed by reflex. `--insecure` exists for a host on a
+private network and is repeated on every push and pull, because a warning shown
+once at setup is a warning nobody has seen.
+
+### Revocation
+
+A machine's token can be withdrawn, and the row and its pointer survive. The
+machine being revoked is usually the one that was lost, which is when the work it
+pushed matters most: dropping the row would hide its last snapshot from everyone
+else. Nothing recorded is ever lost, revocation included.
+
+Revocation is authenticated by the **join secret**, never by a bearer token. The
+lost machine holds a token and does not hold the join secret, which the client
+trades away at enrolment and never writes down. Accepting a token would let
+whoever took the machine revoke everyone else first. Re-enrolling lifts a
+revocation, since reaching enrolment already took the operator's own credential,
+and it is the only way back from revoking the wrong id.
+
+**What revocation is not.** The workspace key is on that machine's disk, with
+every object it already fetched. Nothing a server does reaches it. A machine in
+someone else's hands calls for a new key and a fresh server; revocation closes the
+door, it does not empty the room. Saying so at the point of use matters more than
+saying it here: someone who believes a revoked laptop can no longer read is worse
+off than someone who knows they have to rotate.
 ### Encryption
 
 The object store is **encrypted client-side**. The remote is infrastructure, not a
@@ -367,3 +416,8 @@ plaintext proves it is the chunk that was actually asked for.
 5. A conflicted file is never written half-merged to disk.
 6. An outdated client may read; only writes are refused.
 7. A machine writes only within its own namespace on the remote.
+8. Content that fails the secret scan never reaches the object store, not even
+   locally: refusing after storing has only delayed the push.
+9. Credentials do not travel over plain HTTP to a host that is not loopback,
+   unless that was asked for by name.
+10. Revoking a machine withdraws its token and keeps everything it recorded.

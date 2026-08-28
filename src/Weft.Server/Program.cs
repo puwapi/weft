@@ -67,6 +67,15 @@ static async Task<(T? Value, IResult? Error)> ReadBodyAsync<T>(
     }
 }
 
+// Constant-time: a byte-by-byte comparison that stops at the first difference
+// leaks the secret's prefix through timing, one character at a time.
+bool JoinSecretOk(string? provided)
+{
+    var a = Encoding.UTF8.GetBytes(provided ?? "");
+    var b = Encoding.UTF8.GetBytes(joinSecret);
+    return a.Length == b.Length && CryptographicOperations.FixedTimeEquals(a, b);
+}
+
 Machine? Authenticate(HttpContext ctx)
 {
     var header = ctx.Request.Headers.Authorization.ToString();
@@ -108,11 +117,7 @@ app.MapPost("/v1/enrol", async (HttpContext ctx) =>
     var (req, bodyError) = await ReadBodyAsync(ctx, WireJson.Default.EnrolRequest);
     if (bodyError is not null) return bodyError;
 
-    // Constant-time: a byte-by-byte comparison that stops at the first difference
-    // leaks the secret's prefix through timing, one character at a time.
-    var provided = Encoding.UTF8.GetBytes(req!.JoinSecret);
-    var expected = Encoding.UTF8.GetBytes(joinSecret);
-    if (provided.Length != expected.Length || !CryptographicOperations.FixedTimeEquals(provided, expected))
+    if (!JoinSecretOk(req!.JoinSecret))
         return Error(StatusCodes.Status403Forbidden, "bad_join_secret", "Join secret rejected.");
 
     if (string.IsNullOrWhiteSpace(req.MachineId) || string.IsNullOrWhiteSpace(req.WorkspaceFingerprint))
@@ -125,6 +130,29 @@ app.MapPost("/v1/enrol", async (HttpContext ctx) =>
 
     var (machine, token) = store.Enrol(req.MachineId, req.MachineName, req.Platform);
     return Results.Json(new EnrolResponse(token, machine.Id), WireJson.Default.EnrolResponse);
+});
+
+// Withdraws a machine's token. Guarded by the join secret and NOT by a bearer
+// token, which is the point: the machine being revoked is usually the one that
+// was lost, and it holds a token. It does not hold the join secret, because the
+// client exchanges that for a token at enrolment and never writes it down.
+// Accepting a token here would let whoever took the machine revoke everyone else.
+app.MapPost("/v1/machines/{id}/revoke", async (string id, HttpContext ctx) =>
+{
+    var (req, bodyError) = await ReadBodyAsync(ctx, WireJson.Default.RevokeRequest);
+    if (bodyError is not null) return bodyError;
+
+    // The secret is checked before the machine is looked up. The other order
+    // answers "does this machine exist?" to anyone who asks, which is a question
+    // an unauthenticated caller has no business getting an answer to.
+    if (!JoinSecretOk(req!.JoinSecret))
+        return Error(StatusCodes.Status403Forbidden, "bad_join_secret", "Join secret rejected.");
+
+    if (!store.Revoke(id))
+        return Error(StatusCodes.Status404NotFound, "no_such_machine",
+            "No machine by that id is currently enrolled. Run 'weft remote machines' for the list.");
+
+    return Results.NoContent();
 });
 
 // ---------- authenticated ----------

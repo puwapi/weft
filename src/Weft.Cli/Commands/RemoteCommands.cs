@@ -98,10 +98,27 @@ internal static class RemoteCommands
 
     // ---------- remote ----------
 
-    public static async Task<int> RemoteAddAsync(string? rootOverride, string url, string joinSecret, CancellationToken ct)
+    public static async Task<int> RemoteAddAsync(
+        string? rootOverride, string url, string joinSecret, bool insecure, CancellationToken ct)
     {
         var ctx = Load(rootOverride);
         if (ctx is null) return 1;
+
+        // Judged before anything is sent. The join secret is in this command's
+        // arguments, so the first request already carries a credential: checking
+        // after the probe would mean checking after the leak.
+        var verdict = RemoteUrl.Check(url, insecure);
+        if (!verdict.Ok)
+        {
+            AnsiConsole.WriteLine();
+            foreach (var line in verdict.Refusal!.Split('\n'))
+                AnsiConsole.MarkupLine($"[red]{Markup.Escape(line)}[/]");
+            return 1;
+        }
+
+        url = verdict.Url;
+        if (verdict.Warning is not null)
+            AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(verdict.Warning)}[/]");
 
         using var probe = new RemoteClient(url, null);
 
@@ -144,12 +161,96 @@ internal static class RemoteCommands
             return 1;
         }
 
-        LocalSecrets.SaveRemote(ctx.Root, new RemoteConfig(url.TrimEnd('/'), enrolled.Token, DateTimeOffset.UtcNow));
+        LocalSecrets.SaveRemote(ctx.Root, new RemoteConfig(url, enrolled.Token, DateTimeOffset.UtcNow));
 
         AnsiConsole.MarkupLine($"[green]Enrolled[/] [dim]as {Markup.Escape(ctx.Machine.Name)} on {Markup.Escape(url)}[/]");
         AnsiConsole.MarkupLine($"[dim]Server {Markup.Escape(info.Server)}, protocol v{info.Protocol}, "
             + $"writes require weft >= {Markup.Escape(info.MinClient)}[/]");
         return 0;
+    }
+
+    /// <summary>Lists the machines the server knows, and whether each is still allowed in.</summary>
+    public static async Task<int> RemoteMachinesAsync(string? rootOverride, CancellationToken ct)
+    {
+        var s = Prepare(rootOverride);
+        if (s is null) return 1;
+        var (ctx, client) = s.Value;
+
+        using (client)
+        {
+            IReadOnlyList<HeadEntry> heads;
+            try { heads = await client.HeadsAsync(ct).ConfigureAwait(false); }
+            catch (Exception e) when (e is RemoteException or HttpRequestException) { return Fail(e); }
+
+            AnsiConsole.WriteLine();
+            var t = new Table().Border(TableBorder.Rounded);
+            t.AddColumn("Machine");
+            t.AddColumn("Id");
+            t.AddColumn("Platform");
+            t.AddColumn("Last seen");
+            t.AddColumn("State");
+
+            foreach (var h in heads.OrderBy(h => h.MachineName, StringComparer.Ordinal))
+            {
+                var mine = h.MachineId == ctx.Machine.Id;
+                t.AddRow(
+                    mine ? $"[bold]{Markup.Escape(h.MachineName)}[/] [dim](this one)[/]" : Markup.Escape(h.MachineName),
+                    $"[dim]{Markup.Escape(h.MachineId)}[/]",
+                    Markup.Escape(h.Platform),
+                    Ago(h.LastSeenUtc),
+                    h.RevokedUtc is null ? "[green]enrolled[/]" : $"[red]revoked[/] [dim]{Ago(h.RevokedUtc.Value)}[/]");
+            }
+
+            AnsiConsole.Write(t);
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[dim]Withdraw one with [bold]weft remote revoke <id> --join <secret>[/].[/]");
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Withdraws a machine's token.
+    /// </summary>
+    /// <remarks>
+    /// Asks for the join secret rather than using this machine's token, and says
+    /// plainly what revoking does not do: the workspace key is on the revoked
+    /// machine's disk, and no server-side action can reach it. Someone who thinks
+    /// a revoked laptop can no longer read what it already holds is worse off than
+    /// someone who knows they have to rotate the key.
+    /// </remarks>
+    public static async Task<int> RemoteRevokeAsync(
+        string? rootOverride, string machineId, string joinSecret, CancellationToken ct)
+    {
+        var s = Prepare(rootOverride);
+        if (s is null) return 1;
+        var (ctx, client) = s.Value;
+
+        using (client)
+        {
+            if (machineId == ctx.Machine.Id)
+            {
+                AnsiConsole.MarkupLine("[red]That is this machine.[/]");
+                AnsiConsole.MarkupLine("[dim]Revoking it here would only cut this workspace off from its own "
+                    + "server. Run this from another machine, on the id you want out.[/]");
+                return 1;
+            }
+
+            try { await client.RevokeAsync(machineId, joinSecret, ct).ConfigureAwait(false); }
+            catch (Exception e) when (e is RemoteException or HttpRequestException) { return Fail(e); }
+
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine($"[green]Revoked[/] [dim]{Markup.Escape(machineId)}[/]");
+            AnsiConsole.MarkupLine("[dim]Its token no longer works. What it already pushed is untouched, and "
+                + "its snapshot still shows in [bold]weft pull[/]: losing a machine is not a reason to lose "
+                + "its work.[/]");
+            AnsiConsole.WriteLine();
+            AnsiConsole.MarkupLine("[yellow]This does not undo what that machine can read.[/]");
+            AnsiConsole.MarkupLine("[dim]It still holds the workspace key on its disk, and every object it "
+                + "already fetched. If the machine is in someone else's hands, generate a new key, run "
+                + "[bold]weft key set --force[/] on the machines you keep, and start a fresh server: "
+                + "revocation closes the door, it does not empty the room.[/]");
+            return 0;
+        }
     }
 
     // ---------- push and pull ----------
@@ -276,6 +377,12 @@ internal static class RemoteCommands
             AnsiConsole.MarkupLine("[dim]Run [bold]weft remote add <url> --join <secret>[/].[/]");
             return null;
         }
+
+        // Repeated on every push and pull rather than only at 'remote add'. A
+        // warning shown once, months ago, on a machine someone else set up, is
+        // not a warning anyone has seen.
+        var warning = RemoteUrl.WarnAbout(remote.Url);
+        if (warning is not null) AnsiConsole.MarkupLine($"[yellow]{Markup.Escape(warning)}[/]");
 
         return (ctx, new RemoteClient(remote.Url, remote.Token));
     }

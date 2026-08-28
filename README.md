@@ -170,6 +170,37 @@ scripts/probe-server.sh <url> <join-secret> <token-a> <token-b>
 Those are the behaviours a well-behaved client never exercises, which is why they
 are probed over HTTP rather than left to unit tests.
 
+### Reaching it
+
+`weft remote add` refuses plain HTTP to anything but a loopback address. Your
+files would still be encrypted, so this is not about content: the join secret and
+the machine's token are not, and either one buys enrolment and a full download of
+every object. `--insecure` allows it for a host that is only reachable over a
+private network, and says so on every push and pull afterwards rather than once,
+months ago, on a machine somebody else set up.
+
+### Losing a machine
+
+```
+weft remote machines                        # who is enrolled, and since when
+weft remote revoke <id> --join <secret>
+```
+
+Revoking withdraws that machine's token and **keeps everything it recorded**. The
+machine you are revoking is usually the one that was lost, which is exactly when
+the work it pushed matters most; its snapshot stays where `weft pull` can see it.
+
+It asks for the join secret rather than using this machine's token, and that is
+the point. The lost machine holds a token. It does not hold the join secret,
+because the client trades that for a token at enrolment and never writes it down.
+Accepting a token here would let whoever took the machine revoke everyone else
+first.
+
+**Revoking does not undo what that machine can read.** The workspace key is on its
+disk, along with every object it already fetched. If it is in someone else's
+hands, the answer is a new key on the machines you keep and a fresh server:
+revocation closes the door, it does not empty the room.
+
 ## Uncommitted work
 
 The failure this tool was built for is a branch that lives on one disk, that the
@@ -327,6 +358,14 @@ refuses every other `.env.*`, without opening a hole a pattern could widen.
 If a `.stignore` is present, `weft init` imports it. Rules that look confidential
 are routed to `.weftnever`, including rules whose only clue is the comment above
 them, and every reclassification is reported so you can move it back.
+
+Behind both, a **secret scanner** reads what a snapshot is about to record, in
+loose files and in uncommitted work alike, and refuses the whole snapshot rather
+than warning. A path rule cannot catch a key pasted into a source file while
+debugging, because that path is one nobody would ever have thought to list. It
+runs only on content the store does not already hold, so an unchanged tree is not
+re-read, and it stays deliberately narrow: a scanner that fires on ordinary source
+teaches people to reach for a bypass, and then it protects nothing.
 
 ## Roadmap
 
