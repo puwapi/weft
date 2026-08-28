@@ -158,8 +158,22 @@ Everything it holds is in `/data`: back that volume up and you have backed up th
 server. It cannot read any of it.
 
 Put it behind whatever gives you TLS. It speaks plain HTTP on 8080 and expects a
-reverse proxy in front. **Use HTTPS**: your content is encrypted either way, but
-the enrolment secret and the machine tokens are not.
+reverse proxy in front.
+
+**HTTPS is not optional here, and weft enforces it.** Your files are encrypted
+either way, but the join secret and each machine's token are not: anyone on the
+path could take one, enrol, and download every object. `weft remote add` refuses a
+plain-HTTP address unless the host is local:
+
+```
+Refusing to send credentials over plain HTTP to weft.example.com.
+Your files would still be encrypted, but the join secret and this machine's
+token would not.
+```
+
+`--insecure` exists for a server on a private network you already trust. It says
+so again on every push and pull, because a warning shown once during setup is a
+warning nobody has seen.
 
 This is not left to good intentions. `weft remote add` refuses an `http://` URL
 for anything but your own machine. If the server is only reachable over a private
