@@ -26,7 +26,11 @@ public sealed class WorkCaptureTests : IDisposable
         var path = Path.Combine(_dir, name);
         Directory.CreateDirectory(path);
 
-        await Run(path, "init", "-q");
+        // The branch is named here rather than left to git. init.defaultBranch is
+        // 'master' on a stock install and 'main' on many configured ones, so a
+        // test that assumes either fails for half the people who run it, on a
+        // point that has nothing to do with what it is checking.
+        await Run(path, "init", "-q", "-b", "main");
         await Run(path, "config", "user.email", "t@example.com");
         await Run(path, "config", "user.name", "t");
 
@@ -153,7 +157,7 @@ public sealed class WorkCaptureTests : IDisposable
 
         Assert.NotNull(patch);
         Assert.Equal(head, patch.BaseCommit);
-        Assert.Equal("main", patch.Branch.Length == 0 ? "main" : patch.Branch);
+        Assert.Equal("main", patch.Branch);
     }
 
     [Fact]

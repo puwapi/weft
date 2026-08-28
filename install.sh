@@ -33,8 +33,9 @@ asset="weft-$os-$arch"
 # The binaries link against glibc. Alpine and other musl systems need a build
 # from source, and saying so beats a download that fails at exec time with
 # "not found" for a file that is plainly there.
-if [ "$os" = linux ] && [ ! -e /lib/ld-linux-x86-64.so.2 ] && [ ! -e /lib/ld-linux-aarch64.so.1 ] \
-   && [ -e /lib/ld-musl-x86_64.so.1 -o -e /lib/ld-musl-aarch64.so.1 ]; then
+if [ "$os" = linux ] \
+   && [ ! -e /lib/ld-linux-x86-64.so.2 ] && [ ! -e /lib/ld-linux-aarch64.so.1 ] \
+   && { [ -e /lib/ld-musl-x86_64.so.1 ] || [ -e /lib/ld-musl-aarch64.so.1 ]; }; then
   die "this looks like a musl system (Alpine). The published binaries need glibc.
      Build from source instead: https://github.com/$REPO#building"
 fi

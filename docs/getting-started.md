@@ -127,25 +127,35 @@ Answers the question directly: does this work exist anywhere but here?
 
 One container, one volume, no database to run.
 
-```bash
-git clone https://github.com/puwapi/weft && cd weft
-cp .env.example .env
-```
-
-Edit `.env` and set a join secret. Machines present it once, when they enrol:
+First, a join secret. Machines present it once, when they enrol:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Then:
+Then either one command:
 
 ```bash
+docker run -d --name weft-server \
+  -v weft-data:/data \
+  -e Weft__JoinSecret=<the-secret> \
+  -p 8080:8080 \
+  ghcr.io/puwapi/weft-server:latest
+```
+
+or, if you prefer a compose file:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/puwapi/weft/main/docker-compose.yml
+echo "WEFT_JOIN_SECRET=<the-secret>" > .env
 docker compose up -d
 ```
 
 The server refuses to start without a join secret, rather than running as
 something nobody can join.
+
+Everything it holds is in `/data`: back that volume up and you have backed up the
+server. It cannot read any of it.
 
 Put it behind whatever gives you TLS. It speaks plain HTTP on 8080 and expects a
 reverse proxy in front. **Use HTTPS**: your content is encrypted either way, but

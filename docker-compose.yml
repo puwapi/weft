@@ -5,9 +5,12 @@
 #
 services:
   weft-server:
-    build:
-      context: .
-      dockerfile: src/Weft.Server/Dockerfile
+    # The published image, so this file works on its own without the source.
+    # Swap it for the build below to run your own.
+    image: ghcr.io/puwapi/weft-server:latest
+    # build:
+    #   context: .
+    #   dockerfile: src/Weft.Server/Dockerfile
     restart: unless-stopped
     environment:
       # Machines present this once, at 'weft remote add'. It is not a session
