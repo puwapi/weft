@@ -17,6 +17,9 @@ public sealed class WeftRoot
 
     public string MetaPath => System.IO.Path.Combine(Path, MetaDir);
 
+    /// <summary>Where the object store lives.</summary>
+    public string StorePath => System.IO.Path.Combine(MetaPath, "store");
+
     /// <summary>
     /// Walks up from <paramref name="startDir"/> looking for a '.weft' directory.
     /// </summary>

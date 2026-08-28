@@ -39,9 +39,18 @@ internal static class Program
         };
         init.SetAction((pr, ct) => InitCommand.RunAsync(pr.GetValue(initRoot), pr.GetValue(name), pr.GetValue(force), ct));
 
+        var snapRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
+        var snapVerbose = new Option<bool>("--verbose", "-v") { Description = "List every path that changed." };
+
+        var snapshot = new Command("snapshot", "Record the state of the workspace. Never writes into a working tree.")
+        {
+            snapRoot, snapVerbose,
+        };
+        snapshot.SetAction((pr, ct) => SnapshotCommand.RunAsync(pr.GetValue(snapRoot), pr.GetValue(snapVerbose), ct));
+
         var app = new RootCommand("weft: keep a monorepo of many git repositories in step across machines.")
         {
-            init, scan,
+            init, scan, snapshot,
         };
 
         try

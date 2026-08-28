@@ -90,26 +90,53 @@ Files are split on **content-defined boundaries** (FastCDC, 8 KB target, 2 KB
 min, 64 KB max) rather than fixed offsets. Chunks are addressed by BLAKE3 and
 stored once, compressed with zstd.
 
-Why it matters here concretely: the reference monorepo's largest hot file is a
-386 KB document edited several times a day. Fixed-size blocks shift on every
-insertion and force a full re-upload. Content-defined boundaries re-align after
-the edit, so a changed paragraph costs one or two chunks.
+Why it matters, measured on the 377 KB document that this workspace's owner
+edits several times a day:
 
-### Level 2: incremental manifests
+| edit | bytes to send | share of the file |
+|---|---|---|
+| a section appended at the end | 9.3 KB | 2.45% |
+| a paragraph inserted mid-file | 8.4 KB | 2.24% |
+| **a line added at the very top** | **3.6 KB** | **0.95%** |
 
-A snapshot does **not** rewrite the list of 43 000 paths. It stores a **delta
-against its parent** (added, changed, removed). A full manifest is materialised
-every N snapshots so that reconstruction stays bounded.
+The last row is the case that justifies the whole mechanism: it shifts every byte
+in the file. Fixed-size blocks would re-send all 377 KB.
+
+Across whole repositories, five commits apart: 12.8 MB of source costs 800 KB to
+bring up to date (6.1%); 1.7 MB costs 83 KB (4.7%).
+
+### Level 2: incremental manifests, with no delta format
+
+A snapshot does **not** re-send the whole file listing. But there is no delta
+format either, and that is a deliberate simplification made during
+implementation.
+
+The manifest is stored **as an ordinary file**: serialised with entries sorted by
+path, then split by the same content-defined chunker and put in the same store.
+Adding one file changes the one chunk its line lands in and leaves every other
+chunk identical, so the incremental property falls out of the storage layer.
+
+That removes everything a delta chain drags along: no compaction schedule, no
+"materialise a full manifest every N snapshots", and no chain to walk before a
+manifest can be read.
+
+Measured: 9 113 files produce a manifest of roughly 1.4 MB, so a snapshot
+touching five files rewrites about five of its chunks.
 
 ### Hashing choices, and why two of them
 
-| Purpose | Algorithm | Why |
-|---|---|---|
-| Change detection during scan | XxHash128 | Measured at **27.9 GB/s** on the target machine. Non-cryptographic is fine: this only decides "did this file change", and a `stat` mismatch already gated it. |
-| Content addressing | BLAKE3 | Chunk identity is a security boundary. A collision here means serving the wrong content. Must be cryptographic. |
+| Purpose | Algorithm | Measured | Why |
+|---|---|---|---|
+| Change detection during scan | XxHash128 | 14.2 GB/s | Only decides "did this file change", after a `stat` mismatch already gated it. Non-cryptographic is fine. |
+| Content addressing | SHA-256 | 3.05 GB/s | Chunk identity is a security boundary: a collision means serving the wrong content, so it must be cryptographic. |
+| Storage compression | Deflate, `Optimal` | 30.8% ratio | Beat Brotli on ratio **and** speed on real source. |
 
-Using one algorithm for both would either make scanning needlessly slow or make
-addressing unsafe. Neither is acceptable.
+SHA-256 rather than BLAKE3, and Deflate rather than zstd, for one shared reason:
+both are in the standard library. A native binding would be faster on paper and
+would make the tool AOT-hostile, add a supply-chain dependency to a security
+boundary, and complicate every cross-platform build. 3 GB/s is not the
+constraint, because the cryptographic hash only ever runs on content that
+changed.
 
 ### The scan must never enter ignored directories
 

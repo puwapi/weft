@@ -75,12 +75,19 @@ dotnet publish src/Weft.Cli -c Release -o ./publish
 ```
 weft init      # create a workspace, importing an existing .stignore if present
 weft scan      # report what weft sees, changing nothing
+weft snapshot  # record the state of the workspace
 ```
 
 `weft scan` reports repositories, working trees, loose files, and anything it
 refuses as confidential. It also flags trees that are **at risk**: worktrees
 living in a temp directory the OS may reclaim, or outside the workspace where
 weft cannot reach them.
+
+`weft snapshot` records the state and reports what a push would cost. Appending a
+section to a 377 KB document sends 9.3 KB. Adding a line at the very top of it,
+which shifts every byte in the file, sends 3.6 KB. It also lists every repository
+holding uncommitted work, every time, because a branch that lives on one disk is
+invisible precisely because nobody thought to look.
 
 ## Rules
 
@@ -106,8 +113,8 @@ them, and every reclassification is reported so you can move it back.
 - [x] Repository and worktree discovery, including trees outside the workspace
 - [x] Machine identity
 - [x] `.stignore` import
-- [ ] Content-addressed store with content-defined chunking
-- [ ] Snapshots and incremental manifests
+- [x] Content-addressed store with content-defined chunking
+- [x] Snapshots and incremental manifests
 - [ ] Remote, and the sync protocol
 - [ ] Three-way merge with format-aware drivers
 - [ ] Uncommitted work capture and transfer

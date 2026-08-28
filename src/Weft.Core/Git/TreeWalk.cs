@@ -91,6 +91,16 @@ public sealed class TreeWalk
                 // and their contents would then be snapshotted as loose files.
                 if (e.Name == ".git") { isCheckout = true; continue; }
 
+                // weft's own metadata, skipped structurally rather than by a rule
+                // the user could remove.
+                //
+                // Without this, the second snapshot walks the object store that
+                // the first one wrote and stores it inside itself: every snapshot
+                // then roughly doubles the store, and the growth looks like real
+                // content because it is real content, just already recorded.
+                // Found by running two snapshots in a row, not by reading.
+                if (rel.Length == 0 && e.Name == Workspace.WeftRoot.MetaDir) continue;
+
                 var child = rel.Length == 0 ? e.Name : $"{rel}/{e.Name}";
 
                 // A symlinked directory is recorded as a file entry and never

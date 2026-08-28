@@ -5,6 +5,13 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
+    <!-- Le reste de la solution tourne en mode globalisation invariante, ce qui
+         empeche materiellement un bug de culture. Les tests, eux, doivent
+         pouvoir CHARGER une autre culture pour verifier que le code s'en moque :
+         sinon on n'eprouve pas la propriete, on constate un reglage de build,
+         et Weft.Core est une bibliotheque qu'un autre hote peut consommer sans
+         ce reglage. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
   </PropertyGroup>
 
   <ItemGroup>
