@@ -65,6 +65,11 @@ jobs:
   # The server as an image, so running one is a single command rather than a
   # clone and a build. Multi-arch because the machine people put it on is as
   # likely to be arm as x64 now.
+  #
+  # The arm64 half is built under QEMU and is SLOW: emulating a .NET publish costs
+  # tens of minutes, and it is why this job outlives the six binaries beside it.
+  # Building each architecture on its own runner and merging a manifest would fix
+  # that; it is more workflow than it is worth until someone is waiting on it.
   server:
     runs-on: ubuntu-latest
     permissions:
