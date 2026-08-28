@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Weft.Core/Weft.Core.csproj" />
+    <Project Path="src/Weft.Cli/Weft.Cli.csproj" />
+    <Project Path="src/Weft.Server/Weft.Server.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Weft.Core.Tests/Weft.Core.Tests.csproj" />
+  </Folder>
+</Solution>

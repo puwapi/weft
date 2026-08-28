@@ -1,0 +1,19 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <InvariantGlobalization>true</InvariantGlobalization>
+
+    <!-- AOT hygiene is enforced on every project, not just the one that ships
+         as a native binary. A Core type that needs reflection must fail the
+         build here, not at runtime on a user's machine.
+         Spectre.Console.Cli was rejected for exactly this: it compiled clean
+         and threw "Could not get settings type" once published. -->
+    <IsAotCompatible>true</IsAotCompatible>
+    <TrimmerSingleWarn>false</TrimmerSingleWarn>
+  </PropertyGroup>
+</Project>

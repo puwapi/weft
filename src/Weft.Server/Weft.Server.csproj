@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Weft.Core\Weft.Core.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Le serveur tourne en conteneur avec le runtime complet, comme les autres
+         stacks de la plateforme : l'AOT n'y achete rien et contraindrait les
+         minimal APIs sans contrepartie.
+         Weft.Core, lui, RESTE AOT-propre : il est reference par le CLI natif,
+         donc toute dependance a la reflexion qu'on y introduirait casserait le
+         binaire a l'execution et non a la compilation. -->
+    <IsAotCompatible>false</IsAotCompatible>
+  </PropertyGroup>
+
+</Project>

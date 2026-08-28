@@ -1,0 +1,25 @@
+# .NET build output
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+TestResults/
+artifacts/
+
+# Published binaries
+publish/
+out/
+
+# Editors
+.vs/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# weft's own workspace metadata, if someone runs weft on this repo
+.weft/
