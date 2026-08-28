@@ -6,17 +6,35 @@ using Weft.Core.Store;
 
 namespace Weft.Core.Workspace;
 
-/// <summary>Credentials were found in work about to be recorded.</summary>
+/// <summary>Which of the two things a snapshot records a credential turned up in.</summary>
+/// <remarks>
+/// Kept apart because the way out differs. Uncommitted work can be left behind
+/// with '--no-carry'; a loose file cannot, and offering that flag for one would
+/// send someone chasing a switch that changes nothing.
+/// </remarks>
+public enum SecretOrigin
+{
+    /// <summary>A file the workspace holds directly, outside every repository.</summary>
+    LooseFile,
+
+    /// <summary>A patch of uncommitted work inside a checkout.</summary>
+    CarriedWork,
+}
+
+/// <summary>One credential, and where it was about to be recorded from.</summary>
+public sealed record SecretHit(string Where, SecretOrigin Origin, SecretFinding Finding);
+
+/// <summary>Credentials were found in content about to be recorded.</summary>
 /// <remarks>
 /// Blocks the snapshot rather than warning and continuing. A warning that does not
 /// stop anything is read once and then never again, and the cost of the two
 /// mistakes is not comparable: a blocked snapshot is fixed in seconds, a key that
 /// reached the server is not.
 /// </remarks>
-public sealed class SecretsFoundException(IReadOnlyList<(string Repo, SecretFinding Finding)> findings)
-    : Exception($"credentials found in uncommitted work ({findings.Count} occurrence(s))")
+public sealed class SecretsFoundException(IReadOnlyList<SecretHit> findings)
+    : Exception($"credentials found in content about to be recorded ({findings.Count} occurrence(s))")
 {
-    public IReadOnlyList<(string Repo, SecretFinding Finding)> Findings { get; } = findings;
+    public IReadOnlyList<SecretHit> Findings { get; } = findings;
 }
 
 /// <summary>What one snapshot cost and contained.</summary>
@@ -93,6 +111,7 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
         var repoStates = await new RepoStateReader(git).ReadAsync(repos, maxParallel, ct).ConfigureAwait(false);
 
         var entries = new ConcurrentBag<FileEntry>();
+        var looseFindings = new ConcurrentBag<SecretHit>();
         long bytesRead = 0;
         var newChunks = 0;
         long newBytes = 0;
@@ -120,28 +139,60 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
 
                 Interlocked.Add(ref bytesRead, data.Length);
 
+                // Split and name first, store second. A file that turns out to
+                // hold a credential must not have left a trace in the store, and
+                // the scan cannot run until we know the file is new.
                 var chunks = new List<ChunkId>();
+                var fresh = new List<(int Offset, int Length)>();
+
                 foreach (var (offset, length) in FastCdc.Split(data))
                 {
-                    var span = data.AsSpan(offset, length);
-                    var id = ChunkId.Of(span);
-
-                    if (!store.Contains(id))
-                    {
-                        store.Put(span);
-                        Interlocked.Increment(ref newChunks);
-                        Interlocked.Add(ref newBytes, length);
-                    }
-
+                    var id = ChunkId.Of(data.AsSpan(offset, length));
+                    if (!store.Contains(id)) fresh.Add((offset, length));
                     chunks.Add(id);
+                }
+
+                // Scanned only when the file brings content the store does not
+                // already hold, which is what keeps a snapshot of an unchanged
+                // tree from re-reading every line of it. The consequence is worth
+                // stating: content already stored is not scanned again, because
+                // it is already on the server and refusing it now would cost the
+                // snapshot without taking anything back.
+                //
+                // Whole file, never chunk by chunk: a key that straddles a chunk
+                // boundary is invisible to both halves.
+                if (fresh.Count > 0)
+                {
+                    var found = SecretScanner.Scan(data);
+                    if (found.Count > 0)
+                    {
+                        foreach (var f in found) looseFindings.Add(new SecretHit(rel, SecretOrigin.LooseFile, f));
+                        return;
+                    }
+                }
+
+                foreach (var (offset, length) in fresh)
+                {
+                    store.Put(data.AsSpan(offset, length));
+                    Interlocked.Increment(ref newChunks);
+                    Interlocked.Add(ref newBytes, length);
                 }
 
                 entries.Add(new FileEntry(rel, data.Length, info.LastWriteTimeUtc, IsExecutable(info), chunks));
             }).ConfigureAwait(false);
 
-        var carried = carryWork
+        var (carried, carryFindings) = carryWork
             ? await CarryAsync(repos, maxParallel, ct).ConfigureAwait(false)
-            : [];
+            : ([], []);
+
+        // Both sets are reported together. Refusing on the loose files first and
+        // the patches on the next run makes someone fix the same snapshot twice,
+        // and the second refusal reads like the first fix did not work.
+        if (!looseFindings.IsEmpty || carryFindings.Count > 0)
+            throw new SecretsFoundException([
+                .. looseFindings.OrderBy(f => f.Where, StringComparer.Ordinal),
+                .. carryFindings,
+            ]);
 
         var newCarriedBytes = carried.Sum(c => c.NewBytes);
         newChunks += carried.Sum(c => c.NewChunks);
@@ -245,11 +296,14 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
     /// Captures uncommitted work in every checkout inside the workspace.
     /// </summary>
     /// <remarks>
-    /// Scanned for credentials BEFORE anything is stored. A patch is git-tracked
-    /// content, so the path-based ignore rules cannot help: a key pasted into a
-    /// source file while debugging sits in a path nobody would ever have listed.
+    /// Scanned for credentials BEFORE anything is stored, and the findings are
+    /// returned rather than thrown so the caller can refuse once for the whole
+    /// snapshot. A patch is git-tracked content, so the path-based ignore rules
+    /// cannot help: a key pasted into a source file while debugging sits in a path
+    /// nobody would ever have listed.
     /// </remarks>
-    private async Task<IReadOnlyList<(CarriedWork Work, int NewChunks, long NewBytes)>> CarryAsync(
+    private async Task<(IReadOnlyList<(CarriedWork Work, int NewChunks, long NewBytes)> Work,
+                       IReadOnlyList<SecretHit> Findings)> CarryAsync(
         IReadOnlyList<Repository> repos, int maxParallel, CancellationToken ct)
     {
         var capture = new WorkCapture(git);
@@ -266,12 +320,16 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
                 if (patch is not null) patches.Add(patch);
             }).ConfigureAwait(false);
 
-        var findings = new List<(string, SecretFinding)>();
-        foreach (var p in patches)
-            foreach (var f in SecretScanner.Scan(p.Patch))
-                findings.Add((p.RepoPath, f));
+        // Returned rather than thrown, so the caller can report these alongside
+        // anything found in loose files. Nothing below this point runs when there
+        // is a finding, so no chunk of a patch holding a credential is stored.
+        var findings = patches
+            .OrderBy(p => p.RepoPath, StringComparer.Ordinal)
+            .SelectMany(p => SecretScanner.Scan(p.Patch)
+                .Select(f => new SecretHit(p.RepoPath, SecretOrigin.CarriedWork, f)))
+            .ToList();
 
-        if (findings.Count > 0) throw new SecretsFoundException(findings);
+        if (findings.Count > 0) return ([], findings);
 
         var result = new List<(CarriedWork, int, long)>();
 
@@ -295,7 +353,7 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
                 fresh, freshBytes));
         }
 
-        return result;
+        return (result, []);
     }
 
     private static bool SameCarried(IReadOnlyList<CarriedWork> a, IReadOnlyList<CarriedWork> b)

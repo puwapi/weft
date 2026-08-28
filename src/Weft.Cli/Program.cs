@@ -72,11 +72,37 @@ internal static class Program
         var remoteUrl = new Argument<string>("url") { Description = "Base URL of the weft server." };
         var join = new Option<string>("--join") { Description = "Join secret the server was configured with.", Required = true };
         var remoteRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
-        var remoteAdd = new Command("add", "Enrol this machine with a server.") { remoteUrl, join, remoteRoot };
+        var insecure = new Option<bool>("--insecure")
+        {
+            Description = "Allow plain HTTP to a host that is not local. Your files stay encrypted; "
+                + "the join secret and this machine's token do not.",
+        };
+        var remoteAdd = new Command("add", "Enrol this machine with a server.") { remoteUrl, join, remoteRoot, insecure };
         remoteAdd.SetAction((pr, ct) => RemoteCommands.RemoteAddAsync(
-            pr.GetValue(remoteRoot), pr.GetValue(remoteUrl)!, pr.GetValue(join)!, ct));
+            pr.GetValue(remoteRoot), pr.GetValue(remoteUrl)!, pr.GetValue(join)!, pr.GetValue(insecure), ct));
 
-        var remote = new Command("remote", "The server this workspace syncs with.") { remoteAdd };
+        var machinesRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
+        var remoteMachines = new Command("machines", "List the machines enrolled on this server.") { machinesRoot };
+        remoteMachines.SetAction((pr, ct) => RemoteCommands.RemoteMachinesAsync(pr.GetValue(machinesRoot), ct));
+
+        var revokeId = new Argument<string>("machine-id") { Description = "Id from 'weft remote machines'." };
+        var revokeJoin = new Option<string>("--join")
+        {
+            Description = "Join secret. Not this machine's token: the machine you are locking out has one of those.",
+            Required = true,
+        };
+        var revokeRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
+        var remoteRevoke = new Command("revoke", "Withdraw a machine's access. Keeps everything it recorded.")
+        {
+            revokeId, revokeJoin, revokeRoot,
+        };
+        remoteRevoke.SetAction((pr, ct) => RemoteCommands.RemoteRevokeAsync(
+            pr.GetValue(revokeRoot), pr.GetValue(revokeId)!, pr.GetValue(revokeJoin)!, ct));
+
+        var remote = new Command("remote", "The server this workspace syncs with.")
+        {
+            remoteAdd, remoteMachines, remoteRevoke,
+        };
 
         // ---- push and pull ----
         var pushRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };

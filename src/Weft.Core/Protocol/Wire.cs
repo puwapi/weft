@@ -73,13 +73,30 @@ public sealed record MissingResponse(
     [property: JsonPropertyName("missing")] IReadOnlyList<string> Missing);
 
 /// <summary>Where one machine stands.</summary>
+/// <param name="RevokedUtc">
+/// When its token was withdrawn, null while it is still allowed in. A revoked
+/// machine keeps its row and its pointer: the objects it pushed are what someone
+/// would be trying to recover, and dropping the pointer would hide them.
+/// </param>
 public sealed record HeadEntry(
     [property: JsonPropertyName("machineId")] string MachineId,
     [property: JsonPropertyName("machineName")] string MachineName,
     [property: JsonPropertyName("platform")] string Platform,
     [property: JsonPropertyName("snapshot")] string? Snapshot,
     [property: JsonPropertyName("updatedUtc")] DateTimeOffset? UpdatedUtc,
-    [property: JsonPropertyName("lastSeenUtc")] DateTimeOffset LastSeenUtc);
+    [property: JsonPropertyName("lastSeenUtc")] DateTimeOffset LastSeenUtc,
+    [property: JsonPropertyName("revokedUtc")] DateTimeOffset? RevokedUtc = null);
+
+/// <summary>Withdraws one machine's token.</summary>
+/// <remarks>
+/// Authenticated by the join secret, never by a bearer token, and that choice is
+/// the whole point. The machine being revoked is usually the one that was lost,
+/// and it holds a token; it does not hold the join secret, which is never written
+/// to disk by the client. Accepting a token here would let whoever took the
+/// machine revoke everyone else first.
+/// </remarks>
+public sealed record RevokeRequest(
+    [property: JsonPropertyName("joinSecret")] string JoinSecret);
 
 public sealed record HeadsResponse(
     [property: JsonPropertyName("heads")] IReadOnlyList<HeadEntry> Heads);
@@ -101,6 +118,7 @@ public sealed record ApiError(
 [JsonSerializable(typeof(HeadsResponse))]
 [JsonSerializable(typeof(HeadEntry))]
 [JsonSerializable(typeof(SetHeadRequest))]
+[JsonSerializable(typeof(RevokeRequest))]
 [JsonSerializable(typeof(ApiError))]
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 public sealed partial class WireJson : JsonSerializerContext;

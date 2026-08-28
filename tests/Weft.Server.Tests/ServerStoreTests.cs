@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Data.Sqlite;
 using Weft.Server;
@@ -39,6 +40,117 @@ public sealed class ServerStoreTests : IDisposable
         Assert.NotNull(back);
         Assert.Equal(machine.Id, back.Id);
         Assert.Equal("laptop", back.Name);
+    }
+
+    [Fact]
+    public void A_revoked_machine_can_no_longer_authenticate()
+    {
+        var (_, token) = _store.Enrol("m1", "laptop", "linux");
+        Assert.NotNull(_store.Authenticate(token));
+
+        Assert.True(_store.Revoke("m1"));
+        Assert.Null(_store.Authenticate(token));
+    }
+
+    [Fact]
+    public void Revoking_keeps_the_machine_and_everything_it_recorded()
+    {
+        // The machine being revoked is usually the one that was lost, which is
+        // exactly when the work it pushed matters most. Dropping the row would
+        // hide its last snapshot from every other machine.
+        _store.Enrol("m1", "laptop", "linux");
+        _store.SetHead("m1", new string('a', 64));
+
+        _store.Revoke("m1");
+
+        var m = _store.Find("m1");
+        Assert.NotNull(m);
+        Assert.Equal(new string('a', 64), m.Head);
+        Assert.NotNull(m.RevokedUtc);
+        Assert.Contains(_store.AllMachines(), x => x.Id == "m1");
+    }
+
+    [Fact]
+    public void Revoking_one_machine_leaves_the_others_alone()
+    {
+        var (_, keep) = _store.Enrol("m1", "desktop", "linux");
+        var (_, lose) = _store.Enrol("m2", "laptop", "macos");
+
+        _store.Revoke("m2");
+
+        Assert.NotNull(_store.Authenticate(keep));
+        Assert.Null(_store.Authenticate(lose));
+    }
+
+    [Fact]
+    public void Revoking_twice_reports_that_nothing_changed()
+    {
+        // The caller turns this into a 404, so a typo in a machine id says so
+        // rather than reporting a revocation that never happened.
+        _store.Enrol("m1", "laptop", "linux");
+
+        Assert.True(_store.Revoke("m1"));
+        Assert.False(_store.Revoke("m1"));
+        Assert.False(_store.Revoke("never-enrolled"));
+    }
+
+    [Fact]
+    public void The_dead_token_hash_is_not_the_hash_of_any_token()
+    {
+        // Revocation replaces the stored hash rather than nulling it. If it left
+        // anything derivable behind, the old token would still resolve.
+        var (_, token) = _store.Enrol("m1", "laptop", "linux");
+        _store.Revoke("m1");
+
+        using var cx = new SqliteConnection($"Data Source={Path.Combine(_dir, "weft.db")}");
+        cx.Open();
+        using var cmd = cx.CreateCommand();
+        cmd.CommandText = "SELECT token_hash FROM machines WHERE id = 'm1'";
+        var stored = (byte[])cmd.ExecuteScalar()!;
+
+        var real = SHA256.HashData(Encoding.UTF8.GetBytes("weft/token/v1/" + token));
+        Assert.NotEqual(real, stored);
+        Assert.Equal(32, stored.Length);
+    }
+
+    [Fact]
+    public void Re_enrolling_lifts_a_revocation()
+    {
+        // It takes the join secret to reach Enrol, which is the operator's own
+        // credential, and this is the only way back from revoking by mistake.
+        _store.Enrol("m1", "laptop", "linux");
+        _store.Revoke("m1");
+
+        var (_, fresh) = _store.Enrol("m1", "laptop", "linux");
+
+        Assert.NotNull(_store.Authenticate(fresh));
+        Assert.Null(_store.Find("m1")!.RevokedUtc);
+    }
+
+    [Fact]
+    public void Re_enrolling_does_not_bring_the_revoked_token_back()
+    {
+        // The point of the previous test is recovery; the point of this one is
+        // that recovery does not undo the revocation. Whoever holds the old token
+        // must not get back in because the owner re-enrolled the same machine.
+        var (_, stolen) = _store.Enrol("m1", "laptop", "linux");
+        _store.Revoke("m1");
+
+        var (_, fresh) = _store.Enrol("m1", "laptop", "linux");
+
+        Assert.NotNull(_store.Authenticate(fresh));
+        Assert.Null(_store.Authenticate(stolen));
+    }
+
+    [Fact]
+    public void A_store_opened_twice_does_not_fail_on_the_added_column()
+    {
+        // SQLite has no 'ADD COLUMN IF NOT EXISTS'. Running the ALTER blindly
+        // throws on every start after the first, which is every restart.
+        _store.Enrol("m1", "laptop", "linux");
+
+        var again = new ServerStore(_dir);
+        Assert.NotNull(again.Find("m1"));
     }
 
     [Fact]

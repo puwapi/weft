@@ -6,6 +6,10 @@
 # client that behaves would never send these requests.
 #
 #   scripts/probe-server.sh <url> <join-secret> <token-a> <token-b>
+#
+# The server must be running with Weft__MinClient set above 0.0.1, or the version
+# check reports a failure that is really a missing setting: with no floor the
+# write is allowed through and refused later for its body, as a 400.
 set -uo pipefail
 
 URL=${1:?usage: probe-server.sh <url> <join-secret> <token-a> <token-b>}
@@ -58,6 +62,27 @@ curl -s -o /dev/null -X PUT "$URL/v1/head" -H "Authorization: Bearer $TB" -H 'We
 after=$(curl -s "$URL/v1/heads" -H "Authorization: Bearer $TA" \
   | python3 -c 'import sys,json;print(json.load(sys.stdin)["heads"][0]["snapshot"])')
 check "one machine cannot move another's pointer" "$before" "$after"
+
+echo "Revocation"
+# Nothing here actually revokes. A probe that withdrew a real token would break
+# the setup it was handed, and the three properties worth checking are all
+# reachable without touching a live machine.
+#
+# The unknown id is the important one. Answered as 404, this endpoint tells
+# anyone who asks which machine ids exist; the secret has to be judged first, so
+# a wrong secret gets 403 whether or not the machine is real.
+check "a wrong join secret cannot revoke"   403 "$(code -X POST "$URL/v1/machines/probe-absent/revoke" \
+  -H 'Content-Type: application/json' -d '{"joinSecret":"wrong"}')"
+check "a wrong secret hides whether an id exists" 403 "$(code -X POST "$URL/v1/machines/definitely-not-here/revoke" \
+  -H 'Content-Type: application/json' -d '{"joinSecret":"wrong"}')"
+# A bearer token is what a lost machine has. If it bought revocation, whoever
+# took that machine could lock out everyone else first.
+check "a bearer token does not buy revocation" 403 "$(code -X POST "$URL/v1/machines/probe-absent/revoke" \
+  -H "Authorization: Bearer $TA" -H 'Weft-Client: 99.0.0' \
+  -H 'Content-Type: application/json' -d '{"joinSecret":""}')"
+revoke_body="{\"joinSecret\":\"$JOIN\"}"
+check "the right secret on an unknown id is a 404" 404 "$(code -X POST "$URL/v1/machines/definitely-not-here/revoke" \
+  -H 'Content-Type: application/json' -d "$revoke_body")"
 
 echo "Object immutability"
 obj=$(curl -s "$URL/v1/heads" -H "Authorization: Bearer $TA" \

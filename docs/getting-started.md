@@ -161,6 +161,11 @@ Put it behind whatever gives you TLS. It speaks plain HTTP on 8080 and expects a
 reverse proxy in front. **Use HTTPS**: your content is encrypted either way, but
 the enrolment secret and the machine tokens are not.
 
+This is not left to good intentions. `weft remote add` refuses an `http://` URL
+for anything but your own machine. If the server is only reachable over a private
+network and you accept the trade, `--insecure` allows it and repeats the warning
+on every push and pull.
+
 Check it:
 
 ```bash
@@ -178,7 +183,22 @@ weft push
 
 `remote add` exchanges the join secret for a token belonging to this machine
 alone. That token, not the secret, is what every later request carries, so losing
-one machine does not mean rotating everything.
+one machine does not mean rotating everything:
+
+```bash
+weft remote machines                        # who is enrolled
+weft remote revoke <id> --join <the-secret>
+```
+
+That withdraws one machine's token and keeps everything it recorded, because the
+machine you are revoking is usually the one you lost, and its last snapshot is
+what you are trying to get back. It asks for the join secret rather than using
+this machine's token: the lost machine has a token, and does not have the secret.
+
+One thing it cannot do, said plainly because the opposite belief is dangerous:
+that machine still has the workspace key on its disk and every object it already
+fetched. If it is in someone else's hands, you want a new key and a fresh server.
+Revocation closes the door, it does not empty the room.
 
 ---
 
@@ -318,11 +338,13 @@ Update and try again.
 **`weft merge` says objects are missing.** Run `weft pull` first: merge
 reconciles what is already here and never goes to the network.
 
-**A snapshot is refused for a credential.** Something in your uncommitted work
-looks like a key. The message names the file and the line, with the secret masked.
-Take it out, or run `weft snapshot --no-carry` to record everything except
-uncommitted work. It blocks rather than warns because a blocked snapshot is fixed
-in seconds and a key that reached the server is not.
+**A snapshot is refused for a credential.** Something weft was about to record
+looks like a key. The message names the file and the line, with the secret masked,
+and says whether it found it in a file or in uncommitted work. Take it out; add
+the path to `.weftnever` if the file itself is the secret; or, when everything
+listed is uncommitted work, `weft snapshot --no-carry` records the rest without
+it. It blocks rather than warns because a blocked snapshot is fixed in seconds and
+a key that reached the server is not.
 
 **`weft tui` says it needs a terminal.** Its input or output is redirected. Every
 other command works in a pipe.

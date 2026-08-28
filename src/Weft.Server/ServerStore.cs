@@ -9,7 +9,8 @@ namespace Weft.Server;
 public sealed record Machine(
     string Id, string Name, string Platform,
     DateTimeOffset EnrolledUtc, DateTimeOffset LastSeenUtc,
-    string? Head, DateTimeOffset? HeadUpdatedUtc);
+    string? Head, DateTimeOffset? HeadUpdatedUtc,
+    DateTimeOffset? RevokedUtc = null);
 
 /// <summary>
 /// Everything the server keeps: a small metadata database, and opaque blobs.
@@ -79,7 +80,8 @@ public sealed class ServerStore
               enrolled_utc     INTEGER NOT NULL,
               last_seen_utc    INTEGER NOT NULL,
               head             TEXT,
-              head_updated_utc INTEGER
+              head_updated_utc INTEGER,
+              revoked_utc      INTEGER
             );
             CREATE UNIQUE INDEX IF NOT EXISTS ix_machines_token ON machines(token_hash);
 
@@ -89,6 +91,26 @@ public sealed class ServerStore
             );
             """;
         cmd.ExecuteNonQuery();
+
+        AddColumnIfMissing(cx, "machines", "revoked_utc", "INTEGER");
+    }
+
+    /// <summary>Adds a column to a table that predates it.</summary>
+    /// <remarks>
+    /// SQLite has no 'ADD COLUMN IF NOT EXISTS', and running the ALTER blindly
+    /// throws on every start after the first. Asking the schema first is the only
+    /// way this stays idempotent, which is what a server that restarts needs.
+    /// </remarks>
+    private static void AddColumnIfMissing(SqliteConnection cx, string table, string column, string type)
+    {
+        using var probe = cx.CreateCommand();
+        probe.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $c";
+        probe.Parameters.AddWithValue("$c", column);
+        if (Convert.ToInt64(probe.ExecuteScalar()) > 0) return;
+
+        using var alter = cx.CreateCommand();
+        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {type}";
+        alter.ExecuteNonQuery();
     }
 
     // ---------- machines ----------
@@ -113,7 +135,11 @@ public sealed class ServerStore
             INSERT INTO machines (id, name, platform, token_hash, enrolled_utc, last_seen_utc)
             VALUES ($id, $name, $platform, $hash, $now, $now)
             ON CONFLICT(id) DO UPDATE SET
-              name = $name, platform = $platform, token_hash = $hash, last_seen_utc = $now;
+              name = $name, platform = $platform, token_hash = $hash, last_seen_utc = $now,
+              -- Re-enrolling lifts a revocation, because it took the join secret
+              -- to get here and that is the operator's own credential. It is also
+              -- the only way back for a machine revoked by mistake.
+              revoked_utc = NULL;
             """;
         cmd.Parameters.AddWithValue("$id", id);
         cmd.Parameters.AddWithValue("$name", name);
@@ -131,7 +157,11 @@ public sealed class ServerStore
         using var cx = Open();
 
         using var find = cx.CreateCommand();
-        find.CommandText = "SELECT id FROM machines WHERE token_hash = $hash";
+        // The revoked check is belt and braces: revocation already replaces the
+        // hash with bytes no token maps to, so no lookup can match. Stating it in
+        // the query as well means a future change to how revocation is stored
+        // cannot quietly turn every revoked machine back on.
+        find.CommandText = "SELECT id FROM machines WHERE token_hash = $hash AND revoked_utc IS NULL";
         find.Parameters.AddWithValue("$hash", HashToken(token));
 
         // Looked up by hash rather than compared row by row: the index does the
@@ -152,7 +182,7 @@ public sealed class ServerStore
         using var cx = Open();
         using var cmd = cx.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, platform, enrolled_utc, last_seen_utc, head, head_updated_utc
+            SELECT id, name, platform, enrolled_utc, last_seen_utc, head, head_updated_utc, revoked_utc
             FROM machines WHERE id = $id
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -166,7 +196,7 @@ public sealed class ServerStore
         using var cx = Open();
         using var cmd = cx.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, platform, enrolled_utc, last_seen_utc, head, head_updated_utc
+            SELECT id, name, platform, enrolled_utc, last_seen_utc, head, head_updated_utc, revoked_utc
             FROM machines ORDER BY name
             """;
 
@@ -174,6 +204,36 @@ public sealed class ServerStore
         using var r = cmd.ExecuteReader();
         while (r.Read()) list.Add(Read(r));
         return list;
+    }
+
+    /// <summary>
+    /// Withdraws a machine's token, keeping everything it recorded.
+    /// </summary>
+    /// <returns>False when no such machine, or it was already revoked.</returns>
+    /// <remarks>
+    /// <para>The row survives, and so does its pointer. A revoked machine is
+    /// usually one that was lost, which is precisely when the work it pushed
+    /// matters most: deleting the row would hide the last snapshot from every
+    /// other machine and leave its objects unreachable through the heads listing.
+    /// Nothing recorded is ever lost, revocation included.</para>
+    ///
+    /// <para>The stored hash is replaced with random bytes rather than nulled.
+    /// The column is NOT NULL and uniquely indexed, and, more to the point, a
+    /// value that is not the hash of anything cannot be matched by presenting a
+    /// token: reversing it would take a preimage of SHA-256.</para>
+    /// </remarks>
+    public bool Revoke(string machineId)
+    {
+        using var cx = Open();
+        using var cmd = cx.CreateCommand();
+        cmd.CommandText = """
+            UPDATE machines SET token_hash = $dead, revoked_utc = $now
+            WHERE id = $id AND revoked_utc IS NULL
+            """;
+        cmd.Parameters.AddWithValue("$dead", RandomNumberGenerator.GetBytes(32));
+        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$id", machineId);
+        return cmd.ExecuteNonQuery() > 0;
     }
 
     /// <summary>Moves one machine's pointer. Callers must already have checked it is their own.</summary>
@@ -339,8 +399,9 @@ public sealed class ServerStore
         DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(3)),
         DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(4)),
         r.IsDBNull(5) ? null : r.GetString(5),
-        r.IsDBNull(6) ? null : DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6)));
+        r.IsDBNull(6) ? null : DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6)),
+        r.IsDBNull(7) ? null : DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(7)));
 
     public HeadEntry ToHead(Machine m) => new(
-        m.Id, m.Name, m.Platform, m.Head, m.HeadUpdatedUtc, m.LastSeenUtc);
+        m.Id, m.Name, m.Platform, m.Head, m.HeadUpdatedUtc, m.LastSeenUtc, m.RevokedUtc);
 }

@@ -64,19 +64,32 @@ internal static class SnapshotCommand
         AnsiConsole.WriteLine();
 
         var t = new Table().Border(TableBorder.Rounded).BorderColor(Color.Red);
-        t.AddColumn("Checkout");
+        t.AddColumn("Where");
+        t.AddColumn("In");
         t.AddColumn("What it looks like");
         t.AddColumn("Line");
         t.AddColumn("Context");
 
-        foreach (var (repo, f) in e.Findings.Take(20))
-            t.AddRow(Markup.Escape(repo), Markup.Escape(f.Kind), f.Line.ToString(), $"[dim]{Markup.Escape(f.Excerpt)}[/]");
+        foreach (var h in e.Findings.Take(20))
+            t.AddRow(
+                Markup.Escape(h.Where),
+                h.Origin == SecretOrigin.LooseFile ? "[dim]file[/]" : "[dim]uncommitted[/]",
+                Markup.Escape(h.Finding.Kind),
+                h.Finding.Line.ToString(),
+                $"[dim]{Markup.Escape(h.Finding.Excerpt)}[/]");
 
         AnsiConsole.Write(t);
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine("[dim]Everything recorded reaches the server, so this is the last place to catch it.[/]");
-        AnsiConsole.MarkupLine("[dim]Take it out of the file, or run [bold]weft snapshot --no-carry[/] to record "
-            + "everything except uncommitted work.[/]");
+
+        // '--no-carry' is offered only when it would actually help. Suggesting it
+        // for a loose file sends someone to a flag that changes nothing, and the
+        // second refusal then reads as if the tool were broken.
+        AnsiConsole.MarkupLine(e.Findings.All(h => h.Origin == SecretOrigin.CarriedWork)
+            ? "[dim]Take it out of the file, or run [bold]weft snapshot --no-carry[/] to record everything "
+              + "except uncommitted work.[/]"
+            : "[dim]Take it out of the file, or add its path to [bold].weftnever[/] if the file itself is "
+              + "the secret.[/]");
         return 4;
     }
 
