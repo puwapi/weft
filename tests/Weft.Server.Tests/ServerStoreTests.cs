@@ -1,4 +1,5 @@
 using System.Text;
+using Microsoft.Data.Sqlite;
 using Weft.Server;
 
 namespace Weft.Server.Tests;
@@ -12,6 +13,11 @@ public sealed class ServerStoreTests : IDisposable
 
     public void Dispose()
     {
+        // The pool keeps a handle on the database file. On Unix that does not stop
+        // a delete; on Windows it does, and the temp directory would leak from
+        // every test in the class.
+        SqliteConnection.ClearAllPools();
+
         try { Directory.Delete(_dir, recursive: true); } catch (IOException) { }
     }
 
@@ -41,7 +47,16 @@ public sealed class ServerStoreTests : IDisposable
         // A leaked database must not hand over working credentials for every
         // machine on the workspace.
         var (_, token) = _store.Enrol("m1", "laptop", "linux");
-        var db = File.ReadAllText(Path.Combine(_dir, "weft.db"), Encoding.Latin1);
+
+        // Opened sharing the file rather than with File.ReadAllText. SQLite holds
+        // it open, and Windows refuses a second exclusive handle where Unix does
+        // not: reading it the easy way passes everywhere except the one platform
+        // where it matters.
+        using var stream = new FileStream(
+            Path.Combine(_dir, "weft.db"), FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        using var reader = new StreamReader(stream, Encoding.Latin1);
+        var db = reader.ReadToEnd();
 
         Assert.DoesNotContain(token, db, StringComparison.Ordinal);
     }

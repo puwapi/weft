@@ -356,4 +356,7 @@ exactly like one that works.
 
 ## Licence
 
-Apache-2.0.
+Copyright 2026 Puwapi. Licensed under the [Apache License, Version 2.0](LICENSE).
+
+The licence text is left verbatim, as Apache asks; the attribution lives here
+rather than inside it.
