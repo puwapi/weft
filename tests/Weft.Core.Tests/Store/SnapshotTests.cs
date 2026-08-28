@@ -114,3 +114,58 @@ public class SnapshotTests
         Assert.DoesNotContain('\n', back.MachineName);
     }
 }
+
+public class CarriedWorkTests
+{
+    private static ChunkId Cid(string s) => ChunkId.Of(System.Text.Encoding.UTF8.GetBytes(s));
+
+    private static Snapshot WithCarried(params CarriedWork[] carried) => new()
+    {
+        ManifestId = Cid("m"),
+        ManifestChunks = [Cid("m1")],
+        Parents = [],
+        MachineId = "id",
+        MachineName = "mac-studio",
+        CreatedUtc = DateTimeOffset.FromUnixTimeMilliseconds(1_756_000_000_000),
+        Repos = [],
+        Carried = carried,
+        FileCount = 0,
+        TotalBytes = 0,
+    };
+
+    [Fact]
+    public void Carried_work_survives_a_round_trip()
+    {
+        var w = new CarriedWork("hub", "abc123def456", "feat/x", [Cid("p1"), Cid("p2")], 4096, 7, 3);
+        var back = Assert.Single(Snapshot.Parse(WithCarried(w).Serialise()).Carried);
+
+        Assert.Equal("hub", back.RepoPath);
+        Assert.Equal("abc123def456", back.BaseCommit);
+        Assert.Equal("feat/x", back.Branch);
+        Assert.Equal([Cid("p1"), Cid("p2")], back.PatchChunks);
+        Assert.Equal(4096, back.PatchBytes);
+        Assert.Equal(7, back.ChangedFiles);
+        Assert.Equal(3, back.StagedFiles);
+    }
+
+    [Fact]
+    public void A_snapshot_carrying_nothing_round_trips()
+        => Assert.Empty(Snapshot.Parse(WithCarried().Serialise()).Carried);
+
+    [Fact]
+    public void Work_on_a_detached_head_round_trips()
+    {
+        // An empty branch is a real state, not a parse failure.
+        var w = new CarriedWork("hub", "abc", "", [Cid("p")], 1, 1, 0);
+        Assert.Equal("", Assert.Single(Snapshot.Parse(WithCarried(w).Serialise()).Carried).Branch);
+    }
+
+    [Fact]
+    public void A_snapshot_from_an_older_build_that_carries_nothing_still_parses()
+    {
+        // Forward and backward compatibility: 'carry' lines simply are not there.
+        var text = System.Text.Encoding.UTF8.GetString(WithCarried().Serialise());
+        Assert.DoesNotContain("carry ", text, StringComparison.Ordinal);
+        Assert.Empty(Snapshot.Parse(System.Text.Encoding.UTF8.GetBytes(text)).Carried);
+    }
+}

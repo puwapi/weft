@@ -80,6 +80,8 @@ weft remote add https://weft.example --join <secret>
 weft push                                   # send the latest snapshot
 weft pull                                   # fetch what other machines recorded
 weft merge                                  # reconcile with another machine
+weft carry                                  # what exists on this disk and nowhere else
+weft land                                   # apply another machine's uncommitted work
 ```
 
 On a second machine, carry the key over first:
@@ -135,6 +137,50 @@ scripts/probe-server.sh <url> <join-secret> <token-a> <token-b>
 
 Those are the behaviours a well-behaved client never exercises, which is why they
 are probed over HTTP rather than left to unit tests.
+
+## Uncommitted work
+
+The failure this tool was built for is a branch that lives on one disk, that the
+notes describe as shipped, and that a dead drive would erase with nothing to show
+it existed.
+
+`weft snapshot` captures the uncommitted state of every checkout, by default,
+because a safety net you have to switch on is one nobody has switched on when the
+drive fails. `weft carry` answers the question directly:
+
+```
+Checkout   Branch    Files   Where it exists
+proj       main          3   this disk only
+```
+
+It captures **tracked changes and untracked files together**, honouring each
+repository's `.gitignore`, by staging into a throwaway index. Your own index is
+never touched: restaging your work while taking a snapshot would silently change
+what your next commit contains, which is worse than missing a file.
+
+Credentials are looked for before anything is recorded, and a hit **blocks** the
+snapshot rather than warning. Ignore rules govern paths, and no path-based rule
+helps here: a key pasted into a source file while debugging sits in a file nobody
+would ever have listed. A blocked snapshot is fixed in seconds; a key that reached
+the server is not.
+
+### Putting it down elsewhere
+
+Never automatic. `weft land` is a command you type, because silently applying a
+patch to a working tree is exactly the gesture that destroys whatever a parallel
+session was doing there.
+
+```
+weft land --dry-run          # say what would happen, write nothing
+weft land                    # apply it
+weft land --3way             # let git reconcile a different base commit
+```
+
+It refuses, with the remedy, when:
+
+- **this checkout already has uncommitted changes** (`--force` to override),
+- **it is on a different commit** than the work was taken on (`--3way` to reconcile),
+- **the patch does not apply**, checked before anything is written.
 
 ## Merging
 
@@ -225,7 +271,7 @@ them, and every reclassification is reported so you can move it back.
 - [x] Client-side encryption that keeps deduplication
 - [x] Server, sync protocol, push and pull
 - [x] Three-way merge with format-aware drivers
-- [ ] Uncommitted work capture and transfer
+- [x] Uncommitted work capture and transfer
 - [ ] TUI
 - [ ] Self-update
 

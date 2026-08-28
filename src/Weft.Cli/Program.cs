@@ -46,7 +46,13 @@ internal static class Program
         {
             snapRoot, snapVerbose,
         };
-        snapshot.SetAction((pr, ct) => SnapshotCommand.RunAsync(pr.GetValue(snapRoot), pr.GetValue(snapVerbose), ct));
+        var noCarry = new Option<bool>("--no-carry")
+        {
+            Description = "Do not record uncommitted work. On by default, because a safety net you have to switch on is one nobody has switched on.",
+        };
+        snapshot.Add(noCarry);
+        snapshot.SetAction((pr, ct) => SnapshotCommand.RunAsync(
+            pr.GetValue(snapRoot), pr.GetValue(snapVerbose), pr.GetValue(noCarry), ct));
 
         // ---- key ----
         var keyRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
@@ -94,9 +100,30 @@ internal static class Program
         merge.SetAction((pr, ct) => MergeCommand.RunAsync(
             pr.GetValue(mergeRoot), pr.GetValue(from), pr.GetValue(cont), pr.GetValue(abort), ct));
 
+        // ---- carry and land ----
+        var carryRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
+        var carry = new Command("carry", "Show which uncommitted work exists on this disk and nowhere else.") { carryRoot };
+        carry.SetAction((pr, ct) => CarryCommands.CarryAsync(pr.GetValue(carryRoot), ct));
+
+        var landRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
+        var landFrom = new Option<string?>("--from") { Description = "Which machine's work to land." };
+        var landRepo = new Option<string?>("--repo") { Description = "Only this checkout." };
+        var landForce = new Option<bool>("--force") { Description = "Land even though this checkout already has uncommitted changes." };
+        var land3Way = new Option<bool>("--3way") { Description = "Let git reconcile when this checkout is on a different commit." };
+        var landDry = new Option<bool>("--dry-run") { Description = "Say what would happen, write nothing." };
+
+        var land = new Command("land",
+            "Apply another machine's uncommitted work here. Never happens on its own.")
+        {
+            landRoot, landFrom, landRepo, landForce, land3Way, landDry,
+        };
+        land.SetAction((pr, ct) => CarryCommands.LandAsync(
+            pr.GetValue(landRoot), pr.GetValue(landFrom), pr.GetValue(landRepo),
+            pr.GetValue(landForce), pr.GetValue(land3Way), pr.GetValue(landDry), ct));
+
         var app = new RootCommand("weft: keep a monorepo of many git repositories in step across machines.")
         {
-            init, scan, snapshot, key, remote, push, pull, merge,
+            init, scan, snapshot, key, remote, push, pull, merge, carry, land,
         };
 
         try

@@ -33,6 +33,31 @@ public sealed class RefStore(string metaDir)
         File.Move(temp, HeadPath, overwrite: true);
     }
 
+    /// <summary>
+    /// The snapshot this machine last pushed.
+    /// </summary>
+    /// <remarks>
+    /// Recorded so weft can answer the one question the whole tool exists for:
+    /// does this work exist anywhere but on this disk? Without it the answer is a
+    /// guess, and a guess in that direction is how a branch ends up on exactly one
+    /// drive with the notes describing it as shipped.
+    /// </remarks>
+    private string PushedPath => Path.Combine(metaDir, "PUSHED");
+
+    public ChunkId? ReadPushed()
+    {
+        if (!File.Exists(PushedPath)) return null;
+        return ChunkId.TryParse(File.ReadAllText(PushedPath).Trim(), out var id) ? id : null;
+    }
+
+    public void WritePushed(ChunkId id)
+    {
+        Directory.CreateDirectory(metaDir);
+        var temp = PushedPath + ".tmp";
+        File.WriteAllText(temp, id.ToString() + "\n");
+        File.Move(temp, PushedPath, overwrite: true);
+    }
+
     // ---------- what other machines had, last time we looked ----------
 
     private string RemoteHeadsPath => Path.Combine(metaDir, "REMOTE_HEADS");

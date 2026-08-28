@@ -84,6 +84,10 @@ public sealed class SyncEngine(
 
         await client.SetHeadAsync(RemoteId.Of(key, head), ct).ConfigureAwait(false);
 
+        // Written only after the pointer moved, so it records what the server
+        // really has rather than what we intended to send.
+        new RefStore(root.MetaPath).WritePushed(head);
+
         return new PushResult
         {
             Snapshot = head,
@@ -169,10 +173,12 @@ public sealed class SyncEngine(
         }
 
         // The manifest names every content chunk, so it has to arrive before the
-        // content can be asked for at all.
+        // rest can be asked for at all. From there the same reachability function
+        // the push uses decides what is needed, which is what keeps the two sides
+        // from drifting apart again.
         var manifest = ReadManifest(snapshot);
 
-        foreach (var chunk in manifest.Entries.SelectMany(e => e.Chunks).Distinct())
+        foreach (var chunk in Reachability.ChunksOf(localId, snapshot, manifest))
         {
             var (n, b) = await EnsureLocalAsync(chunk, ct).ConfigureAwait(false);
             objects += n;
@@ -236,20 +242,9 @@ public sealed class SyncEngine(
         catch (DecryptionFailedException) { return null; }
     }
 
-    /// <summary>Every chunk a snapshot depends on: itself, its manifest, and every file's content.</summary>
     private HashSet<ChunkId> Reachable(ChunkId snapshotId)
     {
         var snapshot = Snapshot.Parse(store.Get(snapshotId));
-
-        var needed = new HashSet<ChunkId> { snapshotId };
-        foreach (var c in snapshot.ManifestChunks) needed.Add(c);
-
-        foreach (var c in ReadManifest(snapshot).Entries.SelectMany(e => e.Chunks)) needed.Add(c);
-
-        // Parents are deliberately NOT followed. A push sends what this snapshot
-        // needs to be readable, not the whole history: an old snapshot is already
-        // on the server if it was ever pushed, and re-walking the chain would make
-        // every push cost proportional to the workspace's age.
-        return needed;
+        return Reachability.ChunksOf(snapshotId, snapshot, ReadManifest(snapshot));
     }
 }

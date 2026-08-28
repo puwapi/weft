@@ -1,9 +1,23 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using Weft.Core.Git;
+using Weft.Core.Safety;
 using Weft.Core.Store;
 
 namespace Weft.Core.Workspace;
+
+/// <summary>Credentials were found in work about to be recorded.</summary>
+/// <remarks>
+/// Blocks the snapshot rather than warning and continuing. A warning that does not
+/// stop anything is read once and then never again, and the cost of the two
+/// mistakes is not comparable: a blocked snapshot is fixed in seconds, a key that
+/// reached the server is not.
+/// </remarks>
+public sealed class SecretsFoundException(IReadOnlyList<(string Repo, SecretFinding Finding)> findings)
+    : Exception($"credentials found in uncommitted work ({findings.Count} occurrence(s))")
+{
+    public IReadOnlyList<(string Repo, SecretFinding Finding)> Findings { get; } = findings;
+}
 
 /// <summary>What one snapshot cost and contained.</summary>
 public sealed record SnapshotResult
@@ -22,6 +36,16 @@ public sealed record SnapshotResult
     /// into the content total once produced "100.82% of the workspace".
     /// </summary>
     public required long ManifestBytes { get; init; }
+
+    /// <summary>
+    /// Bytes of carried patches that were new. Reported apart from file content
+    /// for the same reason as the manifest: a patch is not part of the workspace's
+    /// size, and folding it in once produced a share above 100%.
+    /// </summary>
+    public required long CarriedBytes { get; init; }
+
+    /// <summary>Uncommitted work recorded, per checkout.</summary>
+    public required IReadOnlyList<CarriedWork> Carried { get; init; }
 
     public required int FilesRead { get; init; }
     public required long BytesRead { get; init; }
@@ -51,9 +75,15 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
     /// coming back. Without it the next merge finds the same common ancestor, sees
     /// the same two divergent versions, and asks the same question again, forever.
     /// </remarks>
+    /// <param name="carryWork">
+    /// Capture uncommitted work in every checkout. On by default: this is the
+    /// safety net the tool exists for, and one that has to be asked for is one
+    /// nobody has switched on when the drive fails.
+    /// </param>
     public async Task<SnapshotResult> CreateAsync(
         MachineIdentity machine, int maxParallel = 8,
-        IReadOnlyList<ChunkId>? extraParents = null, CancellationToken ct = default)
+        IReadOnlyList<ChunkId>? extraParents = null, bool carryWork = true,
+        CancellationToken ct = default)
     {
         var sw = Stopwatch.StartNew();
 
@@ -109,6 +139,13 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
                 entries.Add(new FileEntry(rel, data.Length, info.LastWriteTimeUtc, IsExecutable(info), chunks));
             }).ConfigureAwait(false);
 
+        var carried = carryWork
+            ? await CarryAsync(repos, maxParallel, ct).ConfigureAwait(false)
+            : [];
+
+        var newCarriedBytes = carried.Sum(c => c.NewBytes);
+        newChunks += carried.Sum(c => c.NewChunks);
+
         var manifest = new Manifest(entries);
         var manifestBytes = manifest.Serialise();
 
@@ -131,12 +168,15 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
         // a node to the graph carrying no information, and a machine left running
         // would fill the history with them.
         var merging = extraParents is { Count: > 0 };
-        var reposUnchanged = parentId is not null && SameRepos(LoadSnapshot(parentId.Value).Repos, repoStates);
+        var parentSnapshot = parentId is null ? null : LoadSnapshot(parentId.Value);
+        var reposUnchanged = parentSnapshot is not null && SameRepos(parentSnapshot.Repos, repoStates);
+        var carryUnchanged = parentSnapshot is not null
+            && SameCarried(parentSnapshot.Carried, carried.Select(c => c.Work).ToList());
 
         // A merge is always recorded, even when it changed no file. The snapshot
         // exists to say "these two histories are now one", and skipping it because
         // nothing moved would leave the two heads forever divergent.
-        if (!merging && diff.IsEmpty && reposUnchanged)
+        if (!merging && diff.IsEmpty && reposUnchanged && carryUnchanged)
         {
             return new SnapshotResult
             {
@@ -146,6 +186,8 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
                 NewChunks = 0,
                 NewBytes = 0,
                 ManifestBytes = 0,
+                CarriedBytes = 0,
+                Carried = parentSnapshot!.Carried,
                 FilesRead = entries.Count,
                 BytesRead = bytesRead,
                 ElapsedMs = sw.ElapsedMilliseconds,
@@ -162,6 +204,7 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
             MachineName = machine.Name,
             CreatedUtc = DateTimeOffset.UtcNow,
             Repos = repoStates,
+            Carried = carried.Select(c => c.Work).ToList(),
             FileCount = manifest.Entries.Count,
             TotalBytes = manifest.TotalBytes,
         };
@@ -178,6 +221,8 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
             NewChunks = newChunks,
             NewBytes = newBytes,
             ManifestBytes = newManifestBytes,
+            CarriedBytes = newCarriedBytes,
+            Carried = snapshot.Carried,
             FilesRead = entries.Count,
             BytesRead = bytesRead,
             ElapsedMs = sw.ElapsedMilliseconds,
@@ -194,6 +239,78 @@ public sealed class SnapshotEngine(WeftRoot root, ObjectStore store, GitRunner g
             if (!parents.Contains(p)) parents.Add(p);
 
         return parents;
+    }
+
+    /// <summary>
+    /// Captures uncommitted work in every checkout inside the workspace.
+    /// </summary>
+    /// <remarks>
+    /// Scanned for credentials BEFORE anything is stored. A patch is git-tracked
+    /// content, so the path-based ignore rules cannot help: a key pasted into a
+    /// source file while debugging sits in a path nobody would ever have listed.
+    /// </remarks>
+    private async Task<IReadOnlyList<(CarriedWork Work, int NewChunks, long NewBytes)>> CarryAsync(
+        IReadOnlyList<Repository> repos, int maxParallel, CancellationToken ct)
+    {
+        var capture = new WorkCapture(git);
+        var checkouts = repos.SelectMany(r => r.Checkouts).Where(c => c.IsInsideRoot).ToList();
+
+        var patches = new ConcurrentBag<WorkPatch>();
+
+        await Parallel.ForEachAsync(
+            checkouts,
+            new ParallelOptions { MaxDegreeOfParallelism = maxParallel, CancellationToken = ct },
+            async (c, token) =>
+            {
+                var patch = await capture.CaptureAsync(c, token).ConfigureAwait(false);
+                if (patch is not null) patches.Add(patch);
+            }).ConfigureAwait(false);
+
+        var findings = new List<(string, SecretFinding)>();
+        foreach (var p in patches)
+            foreach (var f in SecretScanner.Scan(p.Patch))
+                findings.Add((p.RepoPath, f));
+
+        if (findings.Count > 0) throw new SecretsFoundException(findings);
+
+        var result = new List<(CarriedWork, int, long)>();
+
+        foreach (var p in patches.OrderBy(p => p.RepoPath, StringComparer.Ordinal))
+        {
+            var chunks = new List<ChunkId>();
+            var fresh = 0;
+            long freshBytes = 0;
+
+            foreach (var (offset, length) in FastCdc.Split(p.Patch))
+            {
+                var span = p.Patch.AsSpan(offset, length);
+                var id = ChunkId.Of(span);
+                if (!store.Contains(id)) { store.Put(span); fresh++; freshBytes += length; }
+                chunks.Add(id);
+            }
+
+            result.Add((
+                new CarriedWork(p.RepoPath, p.BaseCommit, p.Branch, chunks,
+                    p.Patch.Length, p.ChangedFiles, p.StagedFiles),
+                fresh, freshBytes));
+        }
+
+        return result;
+    }
+
+    private static bool SameCarried(IReadOnlyList<CarriedWork> a, IReadOnlyList<CarriedWork> b)
+    {
+        if (a.Count != b.Count) return false;
+
+        var byPath = b.ToDictionary(c => c.RepoPath, StringComparer.Ordinal);
+        foreach (var x in a)
+        {
+            if (!byPath.TryGetValue(x.RepoPath, out var y)) return false;
+            if (x.BaseCommit != y.BaseCommit) return false;
+            if (!x.PatchChunks.SequenceEqual(y.PatchChunks)) return false;
+        }
+
+        return true;
     }
 
     public Snapshot LoadSnapshot(ChunkId id) => Snapshot.Parse(store.Get(id));

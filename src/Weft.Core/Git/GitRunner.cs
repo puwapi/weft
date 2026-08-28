@@ -39,7 +39,16 @@ public sealed class GitRunner
         _timeout = timeout ?? TimeSpan.FromSeconds(30);
     }
 
-    public async Task<GitResult> RunAsync(string workingDirectory, CancellationToken ct, params string[] args)
+    public Task<GitResult> RunAsync(string workingDirectory, CancellationToken ct, params string[] args)
+        => RunAsync(workingDirectory, null, ct, args);
+
+    /// <param name="environment">
+    /// Extra variables for this invocation only. Used to point git at a throwaway
+    /// index, so a read-only capture never disturbs what the user has staged.
+    /// </param>
+    public async Task<GitResult> RunAsync(
+        string workingDirectory, IReadOnlyDictionary<string, string>? environment,
+        CancellationToken ct, params string[] args)
     {
         var psi = new ProcessStartInfo
         {
@@ -64,6 +73,9 @@ public sealed class GitRunner
         psi.Environment["GIT_OPTIONAL_LOCKS"] = "0";   // never take index.lock just to read
         psi.Environment["GIT_PAGER"] = "cat";
         psi.Environment["LC_ALL"] = "C";               // stable, parseable messages
+
+        foreach (var (k, v) in environment ?? new Dictionary<string, string>())
+            psi.Environment[k] = v;
 
         using var proc = new Process { StartInfo = psi };
         if (!proc.Start())

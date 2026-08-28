@@ -8,7 +8,7 @@ namespace Weft.Cli.Commands;
 /// <summary>Records the state of the workspace.</summary>
 internal static class SnapshotCommand
 {
-    public static async Task<int> RunAsync(string? rootOverride, bool verbose, CancellationToken ct)
+    public static async Task<int> RunAsync(string? rootOverride, bool verbose, bool noCarry, CancellationToken ct)
     {
         var root = WeftRoot.Discover(rootOverride ?? Directory.GetCurrentDirectory());
 
@@ -31,15 +31,53 @@ internal static class SnapshotCommand
         var engine = new SnapshotEngine(root, store, git);
 
         SnapshotResult result = default!;
-        await AnsiConsole.Status()
-            .Spinner(Spinner.Known.Dots)
-            .StartAsync("Reading the workspace...", async _ =>
-            {
-                result = await engine.CreateAsync(machine, ct: ct).ConfigureAwait(false);
-            }).ConfigureAwait(false);
+        try
+        {
+            await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync("Reading the workspace...", async _ =>
+                {
+                    result = await engine.CreateAsync(machine, carryWork: !noCarry, ct: ct).ConfigureAwait(false);
+                }).ConfigureAwait(false);
+        }
+        catch (SecretsFoundException e)
+        {
+            return ReportSecrets(e);
+        }
 
         Render(result, store, machine, verbose);
         return 0;
+    }
+
+    /// <summary>
+    /// Refuses the snapshot and says exactly where the credential is.
+    /// </summary>
+    /// <remarks>
+    /// Blocking rather than warning. A warning that does not stop anything is read
+    /// once and then never again, and the two mistakes do not cost the same: a
+    /// blocked snapshot is fixed in seconds, a key that reached the server is not.
+    /// </remarks>
+    private static int ReportSecrets(SecretsFoundException e)
+    {
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[red]Refusing to record: this looks like a credential.[/]");
+        AnsiConsole.WriteLine();
+
+        var t = new Table().Border(TableBorder.Rounded).BorderColor(Color.Red);
+        t.AddColumn("Checkout");
+        t.AddColumn("What it looks like");
+        t.AddColumn("Line");
+        t.AddColumn("Context");
+
+        foreach (var (repo, f) in e.Findings.Take(20))
+            t.AddRow(Markup.Escape(repo), Markup.Escape(f.Kind), f.Line.ToString(), $"[dim]{Markup.Escape(f.Excerpt)}[/]");
+
+        AnsiConsole.Write(t);
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine("[dim]Everything recorded reaches the server, so this is the last place to catch it.[/]");
+        AnsiConsole.MarkupLine("[dim]Take it out of the file, or run [bold]weft snapshot --no-carry[/] to record "
+            + "everything except uncommitted work.[/]");
+        return 4;
     }
 
     private static void Render(SnapshotResult r, ObjectStore store, MachineIdentity machine, bool verbose)
@@ -72,10 +110,11 @@ internal static class SnapshotCommand
         // against what the workspace actually holds. Content only; the manifest
         // is reported beside it so the share cannot exceed 100%.
         var share = r.Snapshot.TotalBytes == 0 ? 0 : (double)r.NewBytes / r.Snapshot.TotalBytes;
-        t.AddRow("To send", r.NewChunks == 0 && r.ManifestBytes == 0
+        t.AddRow("To send", r.NewChunks == 0 && r.ManifestBytes == 0 && r.CarriedBytes == 0
             ? "[dim]nothing new[/]"
             : $"[bold]{Bytes(r.NewBytes)}[/] [dim]in {r.NewChunks} chunks, {share:P2} of the workspace"
-              + $"  (+{Bytes(r.ManifestBytes)} manifest)[/]");
+              + $"  (+{Bytes(r.ManifestBytes)} manifest"
+              + (r.CarriedBytes > 0 ? $", +{Bytes(r.CarriedBytes)} carried" : "") + ")[/]");
 
         var (objects, storedBytes) = store.Measure();
         t.AddRow("Store", $"[dim]{objects} objects, {Bytes(storedBytes)}[/]");
@@ -88,6 +127,13 @@ internal static class SnapshotCommand
         // Uncommitted work, the failure this tool exists for. Reported every time,
         // not only when asked: a branch that lives on one disk is invisible
         // precisely because nobody thought to look.
+        var carried = r.Carried;
+        if (carried.Count > 0)
+        {
+            t.AddRow("Carried", $"[green]{carried.Count}[/] [dim]checkout(s), "
+                + $"{carried.Sum(c => c.ChangedFiles)} uncommitted file(s)[/]");
+        }
+
         var dirty = r.Snapshot.Repos.Where(x => x.DirtyFiles > 0).ToList();
         if (dirty.Count > 0)
         {
@@ -96,11 +142,15 @@ internal static class SnapshotCommand
             w.AddColumn("[yellow]Uncommitted[/]");
             w.AddColumn("Branch");
             w.AddColumn(new TableColumn("Files").RightAligned());
+            w.AddColumn("Recorded");
+
+            var carriedPaths = r.Carried.Select(c => c.RepoPath).ToHashSet(StringComparer.Ordinal);
 
             foreach (var x in dirty.OrderByDescending(x => x.DirtyFiles))
                 w.AddRow(Markup.Escape(x.Path),
                     x.Branch.Length == 0 ? "[dim](detached)[/]" : Markup.Escape(x.Branch),
-                    x.DirtyFiles.ToString());
+                    x.DirtyFiles.ToString(),
+                    carriedPaths.Contains(x.Path) ? "[green]yes[/]" : "[red]no[/]");
 
             AnsiConsole.Write(w);
         }

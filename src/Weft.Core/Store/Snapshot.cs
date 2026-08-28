@@ -18,6 +18,23 @@ public sealed record RepoState(
     bool IsPrimary,
     int DirtyFiles);
 
+/// <summary>Uncommitted work in one checkout, as recorded by a snapshot.</summary>
+/// <param name="RepoPath">Checkout path, relative to the workspace root.</param>
+/// <param name="BaseCommit">The commit the patch applies to.</param>
+/// <param name="Branch">Branch it was taken on. Empty when detached.</param>
+/// <param name="PatchChunks">The patch itself, in the object store.</param>
+/// <param name="PatchBytes">Its size, so it can be reported without fetching it.</param>
+/// <param name="ChangedFiles">How many files it touches.</param>
+/// <param name="StagedFiles">How many were staged, so landing can say what it did not restore.</param>
+public sealed record CarriedWork(
+    string RepoPath,
+    string BaseCommit,
+    string Branch,
+    IReadOnlyList<ChunkId> PatchChunks,
+    long PatchBytes,
+    int ChangedFiles,
+    int StagedFiles);
+
 /// <summary>
 /// One recorded state of the workspace.
 /// </summary>
@@ -69,6 +86,17 @@ public sealed record Snapshot
     /// <summary>Where every git checkout stood. Never merged across machines.</summary>
     public required IReadOnlyList<RepoState> Repos { get; init; }
 
+    /// <summary>
+    /// Uncommitted work, carried so that a branch living on one disk is no longer
+    /// invisible everywhere else.
+    /// </summary>
+    /// <remarks>
+    /// Recorded, never applied. Landing it on another machine is an explicit
+    /// command, because silently writing a patch into a working tree is exactly
+    /// the gesture that destroys whatever a parallel session was doing there.
+    /// </remarks>
+    public IReadOnlyList<CarriedWork> Carried { get; init; } = [];
+
     public required int FileCount { get; init; }
     public required long TotalBytes { get; init; }
 
@@ -86,6 +114,16 @@ public sealed record Snapshot
         sb.Append("time ").Append(CreatedUtc.ToUnixTimeMilliseconds()).Append('\n');
         sb.Append("files ").Append(FileCount).Append('\n');
         sb.Append("bytes ").Append(TotalBytes).Append('\n');
+
+        foreach (var c in Carried.OrderBy(c => c.RepoPath, StringComparer.Ordinal))
+            sb.Append("carry ")
+              .Append(Line(c.RepoPath)).Append('\t')
+              .Append(c.BaseCommit).Append('\t')
+              .Append(Line(c.Branch)).Append('\t')
+              .Append(string.Join(',', c.PatchChunks)).Append('\t')
+              .Append(c.PatchBytes.ToString(CultureInfo.InvariantCulture)).Append('\t')
+              .Append(c.ChangedFiles.ToString(CultureInfo.InvariantCulture)).Append('\t')
+              .Append(c.StagedFiles.ToString(CultureInfo.InvariantCulture)).Append('\n');
 
         foreach (var r in Repos.OrderBy(r => r.Path, StringComparer.Ordinal))
             sb.Append("repo ")
@@ -109,6 +147,7 @@ public sealed record Snapshot
         var manifestChunks = new List<ChunkId>();
         var parents = new List<ChunkId>();
         var repos = new List<RepoState>();
+        var carried = new List<CarriedWork>();
         string machineId = "", machineName = "";
         long time = 0, bytes = 0;
         var files = 0;
@@ -138,6 +177,17 @@ public sealed record Snapshot
                 case "files": files = int.Parse(value, CultureInfo.InvariantCulture); break;
                 case "bytes": bytes = long.Parse(value, CultureInfo.InvariantCulture); break;
 
+                case "carry":
+                    var cf = value.Split('\t');
+                    if (cf.Length != 7) throw new InvalidDataException($"malformed carry line: '{line}'");
+                    carried.Add(new CarriedWork(
+                        cf[0], cf[1], cf[2],
+                        cf[3].Length == 0 ? [] : cf[3].Split(',').Select(h => ChunkId.Parse(h)).ToList(),
+                        long.Parse(cf[4], CultureInfo.InvariantCulture),
+                        int.Parse(cf[5], CultureInfo.InvariantCulture),
+                        int.Parse(cf[6], CultureInfo.InvariantCulture)));
+                    break;
+
                 case "repo":
                     var f = value.Split('\t');
                     if (f.Length != 6) throw new InvalidDataException($"malformed repo line: '{line}'");
@@ -163,6 +213,7 @@ public sealed record Snapshot
             MachineName = machineName,
             CreatedUtc = DateTimeOffset.FromUnixTimeMilliseconds(time),
             Repos = repos,
+            Carried = carried,
             FileCount = files,
             TotalBytes = bytes,
         };

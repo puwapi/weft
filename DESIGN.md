@@ -67,9 +67,26 @@ not a conflict, it is Tuesday. Merging them would be actively wrong.
 
 The gap that cost 6 475 lines. Content, but anchored to a git base commit.
 
-Captured continuously, **never applied automatically**. `weft carry` on one
-machine, `weft land` on the other. Silently applying a patch to a working tree is
-precisely the gesture that destroys a colleague's or a parallel session's work.
+Captured continuously, **never applied automatically**. Silently applying a patch
+to a working tree is precisely the gesture that destroys a colleague's or a
+parallel session's work.
+
+Captured as a **patch**, not as file contents, because git already knows how to
+produce and apply one: renames, mode changes, deletions and binary deltas all come
+free, and `--3way` can still land it when the target has moved on.
+
+Capture stages into a **throwaway index** (`GIT_INDEX_FILE`), which is what makes
+one patch cover tracked changes *and* untracked files while honouring
+`.gitignore`. The user's own index is never touched: restaging their work while
+taking a snapshot would silently change what their next commit contains, which is
+worse than missing a file.
+
+A **secret scan** runs before anything is stored, and a hit blocks the snapshot.
+The ignore rules govern paths and cannot help here, because a key pasted into a
+source file while debugging is in a path nobody would ever have listed.
+
+Landing refuses a dirty target, refuses a different base commit unless asked to
+reconcile, and checks the patch before writing anything.
 
 > **Invariant: weft never writes into a git repository's working tree without an
 > explicit command.** Snapshotting is always safe to run.
