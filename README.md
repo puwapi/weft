@@ -82,6 +82,7 @@ weft pull                                   # fetch what other machines recorded
 weft merge                                  # reconcile with another machine
 weft carry                                  # what exists on this disk and nowhere else
 weft land                                   # apply another machine's uncommitted work
+weft tui                                    # full screen: what wants attention, settle conflicts
 ```
 
 On a second machine, carry the key over first:
@@ -182,6 +183,43 @@ It refuses, with the remedy, when:
 - **it is on a different commit** than the work was taken on (`--3way` to reconcile),
 - **the patch does not apply**, checked before anything is written.
 
+## The full-screen view
+
+```
+weft tui
+```
+
+Opens on whatever wants attention, and straight on the conflicts when there are
+any: they are the only thing here that blocks work, and a screen that makes you
+navigate to the problem buries it.
+
+Its reason to exist is the conflict view. Two versions side by side, aligned line
+for line, **framed on the difference**:
+
+```
+   #  ours (here)                     #  theirs
+ ──────────────────────────────────────────────────────
+   3  ## Architecture                 3  ## Architecture
+   4  …erriere nginx.                 4  …erriere Traefik.
+   5                                  5
+   7  …avec un bind mount.            7  …avec un volume nomme.
+```
+
+Two long lines that differ near their end would otherwise truncate to the same
+visible prefix, and you would be shown two identical strings and asked to choose
+between them. Both sides shift by the same amount, and both columns are pinned to
+the same width, so neither version is shown more fully than the other.
+
+`o` keeps yours, `t` takes theirs. Both do exactly what deleting the
+`.weft-theirs` companion by hand does, so resolving here and resolving in an
+editor cannot mean different things.
+
+The state machine behind it is a pure function of state and key, kept apart from
+the drawing and the key loop. That is why the navigation rules, the clamps and the
+resolutions are unit tests rather than something verified by looking at it once,
+which is exactly what could not be done for the widget library this was chosen
+over.
+
 ## Merging
 
 `weft pull` fetches; `weft merge` reconciles. Keeping them apart means a merge
@@ -272,7 +310,7 @@ them, and every reclassification is reported so you can move it back.
 - [x] Server, sync protocol, push and pull
 - [x] Three-way merge with format-aware drivers
 - [x] Uncommitted work capture and transfer
-- [ ] TUI
+- [x] TUI
 - [ ] Self-update
 
 ## Contributing

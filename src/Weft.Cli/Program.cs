@@ -1,6 +1,7 @@
 using System.CommandLine;
 using Spectre.Console;
 using Weft.Cli.Commands;
+using Weft.Cli.Tui;
 
 namespace Weft.Cli;
 
@@ -121,9 +122,14 @@ internal static class Program
             pr.GetValue(landRoot), pr.GetValue(landFrom), pr.GetValue(landRepo),
             pr.GetValue(landForce), pr.GetValue(land3Way), pr.GetValue(landDry), ct));
 
+        // ---- tui ----
+        var tuiRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
+        var tui = new Command("tui", "Full-screen view: what wants attention, and settle conflicts side by side.") { tuiRoot };
+        tui.SetAction((pr, ct) => TuiApp.RunAsync(pr.GetValue(tuiRoot), ct));
+
         var app = new RootCommand("weft: keep a monorepo of many git repositories in step across machines.")
         {
-            init, scan, snapshot, key, remote, push, pull, merge, carry, land,
+            init, scan, snapshot, key, remote, push, pull, merge, carry, land, tui,
         };
 
         try

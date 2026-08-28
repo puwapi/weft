@@ -258,7 +258,10 @@ Where line-based diff3 is bad and structure does better:
 ### Level 4: real conflicts
 
 Genuinely overlapping hunks, diverging binaries, delete-versus-modify. No
-heuristic is honest here, so weft asks.
+heuristic is honest here, so weft asks. `weft tui` shows the two versions side by
+side, aligned line for line and framed on the difference: two long lines that
+differ near their end would otherwise truncate to the same visible prefix, and the
+reader would be shown two identical strings and asked to choose between them.
 
 **No conflict markers are written into the file.** The file is left exactly as it
 was, still holding this machine's version and still valid for every tool that
