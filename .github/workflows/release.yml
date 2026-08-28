@@ -106,6 +106,28 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
 
+      # A container package is created PRIVATE even when its repository is public,
+      # and nothing says so: the push succeeds, the tags appear, and the docker run
+      # in the README fails for everyone but the person who published it. GitHub
+      # offers no API to change it, so this cannot be fixed here; it can be
+      # reported, which is the difference between a broken instruction someone
+      # discovers and one we already know about.
+      #
+      # Reported rather than fatal: the binaries beside it are fine, and failing
+      # the release over a switch nobody can flip from here helps no one.
+      - name: Can a stranger pull it?
+        continue-on-error: true
+        run: |
+          docker logout ghcr.io
+          if docker pull "ghcr.io/${{ github.repository }}-server:latest"; then
+            echo "::notice::the published image is anonymously pullable"
+          else
+            echo "::warning::ghcr.io/${{ github.repository }}-server is not public. \
+          The docker run in the README will fail for everyone else. Flip it once at \
+          https://github.com/orgs/${{ github.repository_owner }}/packages/container/\
+          $(basename ${{ github.repository }})-server/settings"
+          fi
+
   release:
     needs: build
     runs-on: ubuntu-latest
