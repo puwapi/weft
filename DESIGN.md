@@ -164,9 +164,21 @@ is whatever the server accepted, and a client that disagrees is wrong.
 
 **Each machine writes only within its own namespace.** Convergence is computed by
 reading every machine head. This removes the need for a distributed lock, which
-is the usual source of corruption in sync tools. A canonical linear pointer is
-advanced separately under optimistic concurrency, giving a readable history
-without ever blocking a write.
+is the usual source of corruption in sync tools.
+
+In practice that rule has one enforcement point: the machine is taken from the
+bearer token, and no request carries a machine identifier at all. There is no
+parameter that could name someone else's pointer.
+
+**Objects are immutable.** The server holds ciphertext and cannot check that a
+blob matches the name it is filed under, so allowing a rewrite would let any
+enrolled machine replace content every other machine depends on. First writer of
+a name wins.
+
+> The name is claimed with an exclusive create (`O_CREAT|O_EXCL`), not with a
+> rename. `File.Move(overwrite: false)` on Unix tests for the destination and then
+> calls `rename(2)`, which silently replaces it: measured, 5 of 12 concurrent
+> writers all "created" the same object. A sequential test cannot see this.
 
 ### Client version enforcement
 
@@ -256,8 +268,38 @@ Additionally:
 - A **secret scanner** runs on candidate content (private key headers, live API
   key prefixes, connection strings). A hit **blocks the snapshot** and names the
   file rather than warning and continuing.
-- The object store is **encrypted client-side**. The server stores opaque blobs.
-  The remote is infrastructure, not a trust boundary.
+### Encryption
+
+The object store is **encrypted client-side**. The remote is infrastructure, not a
+trust boundary.
+
+A 256-bit key is generated at `weft init` and carried to each other machine by
+hand. There is no passphrase and no key-derivation function: a generated key
+already has full entropy, and a passphrase only adds a way to choose a weak one.
+Two sub-keys are derived from it, one to encrypt and one to name, so that no
+single key serves two purposes.
+
+**Deduplication has to survive encryption, and normally does not.** A fresh random
+nonce makes identical content encrypt differently every time, so the server would
+keep one copy per machine per snapshot and the entire content-addressed design
+would stop paying for itself. The nonce is therefore derived from the chunk's own
+hash: identical content encrypts to identical bytes, and different content yields
+a different nonce, so a (key, nonce) pair is never reused across different
+plaintexts, which is the one thing that breaks AES-GCM outright.
+
+The name the server files an object under is `HMAC(identifier key, chunk hash)`,
+never the hash itself. Using the hash would let anyone holding the server ask
+"do you have this file I already have?" and get an answer.
+
+**The honest cost**: someone holding both the server and a candidate file can
+still confirm whether that exact file is stored, because they could compute the
+same name if they had the key. They learn presence, never content. That is the
+standard trade of convergent encryption, and the alternative is storing every
+machine's copy of every file separately.
+
+Two checks happen on every read, and the server can perform neither: the
+authentication tag proves the bytes are ours and unaltered, and re-hashing the
+plaintext proves it is the chunk that was actually asked for.
 
 ---
 

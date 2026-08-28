@@ -1,0 +1,29 @@
+# A weft server. One container, one volume, no database to run.
+#
+#   Weft__JoinSecret is REQUIRED and the server refuses to start without it.
+#   Generate one with:  openssl rand -hex 32
+#
+services:
+  weft-server:
+    build:
+      context: .
+      dockerfile: src/Weft.Server/Dockerfile
+    restart: unless-stopped
+    environment:
+      # Machines present this once, at 'weft remote add'. It is not a session
+      # credential: each machine gets its own token in exchange, and that token
+      # is what every later request carries.
+      Weft__JoinSecret: "${WEFT_JOIN_SECRET:?set WEFT_JOIN_SECRET, the server will not start without it}"
+
+      # Oldest build allowed to WRITE. Reads are never version-gated: blocking
+      # them would strand an outdated machine with no way to fetch its own work.
+      Weft__MinClient: "${WEFT_MIN_CLIENT:-0.0.0}"
+
+      Weft__MaxObjectBytes: "${WEFT_MAX_OBJECT_BYTES:-67108893}"
+    volumes:
+      - weft-data:/data
+    ports:
+      - "${WEFT_PORT:-8080}:8080"
+
+volumes:
+  weft-data:

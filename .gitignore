@@ -23,3 +23,9 @@ Thumbs.db
 
 # weft's own workspace metadata, if someone runs weft on this repo
 .weft/
+
+# Server publish output
+publish-server/
+
+# Local server configuration
+.env

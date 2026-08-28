@@ -73,9 +73,21 @@ dotnet publish src/Weft.Cli -c Release -o ./publish
 ## Use
 
 ```
-weft init      # create a workspace, importing an existing .stignore if present
-weft scan      # report what weft sees, changing nothing
-weft snapshot  # record the state of the workspace
+weft init                                   # create a workspace, generate its key
+weft scan                                   # report what weft sees, changing nothing
+weft snapshot                               # record the state of the workspace
+weft remote add https://weft.example --join <secret>
+weft push                                   # send the latest snapshot
+weft pull                                   # fetch what other machines recorded
+```
+
+On a second machine, carry the key over first:
+
+```
+weft init
+weft key set weft-XXXXXXXX-XXXXXXXX-...     # from 'weft key show --reveal' on the first
+weft remote add https://weft.example --join <secret>
+weft pull
 ```
 
 `weft scan` reports repositories, working trees, loose files, and anything it
@@ -88,6 +100,40 @@ section to a 377 KB document sends 9.3 KB. Adding a line at the very top of it,
 which shifts every byte in the file, sends 3.6 KB. It also lists every repository
 holding uncommitted work, every time, because a branch that lives on one disk is
 invisible precisely because nobody thought to look.
+
+## The server
+
+One container, one volume, no database to run.
+
+```
+cp .env.example .env      # set WEFT_JOIN_SECRET; the server will not start without one
+docker compose up -d
+```
+
+**The server cannot read your files.** Content is encrypted on the machine that
+holds it, with a key generated at `weft init` and carried to your other machines
+by hand. The server sees ciphertext filed under keyed names it cannot invert. It
+is somewhere to put bytes, not something to trust.
+
+Deduplication survives that, which is the part that usually does not: the nonce
+is derived from each chunk's own hash, so identical content encrypts to identical
+bytes and is stored once. The honest cost of that construction is that anyone
+holding the server and a candidate file can confirm whether that exact file is
+stored. They learn presence, never content.
+
+Two guarantees the server does hold, and a script that checks them:
+
+- **A machine can only move its own pointer.** The machine comes from the token,
+  and no request names another.
+- **Objects are immutable.** The server cannot verify ciphertext against its name,
+  so the first writer of a name wins and nothing can replace it.
+
+```
+scripts/probe-server.sh <url> <join-secret> <token-a> <token-b>
+```
+
+Those are the behaviours a well-behaved client never exercises, which is why they
+are probed over HTTP rather than left to unit tests.
 
 ## Rules
 
@@ -115,7 +161,8 @@ them, and every reclassification is reported so you can move it back.
 - [x] `.stignore` import
 - [x] Content-addressed store with content-defined chunking
 - [x] Snapshots and incremental manifests
-- [ ] Remote, and the sync protocol
+- [x] Client-side encryption that keeps deduplication
+- [x] Server, sync protocol, push and pull
 - [ ] Three-way merge with format-aware drivers
 - [ ] Uncommitted work capture and transfer
 - [ ] TUI

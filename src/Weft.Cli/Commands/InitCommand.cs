@@ -1,4 +1,5 @@
 using Spectre.Console;
+using Weft.Core.Crypto;
 using Weft.Core.Ignore;
 using Weft.Core.Workspace;
 
@@ -28,12 +29,20 @@ internal static class InitCommand
 
         Directory.CreateDirectory(meta);
 
+        // The key is generated once per workspace and reused if one is already
+        // here. Regenerating it would make every object already on the server
+        // undecryptable, and --force is about rule files, not about that.
+        var existingKey = LocalSecrets.TryLoadKey(new WeftRoot { Path = root, Policy = null!, IsInitialised = true });
+        var key = existingKey ?? WorkspaceKey.Generate();
+        if (existingKey is null)
+            LocalSecrets.SaveKey(new WeftRoot { Path = root, Policy = null!, IsInitialised = true }, key);
+
         var (ignoreText, neverText, import) = BuildRules(root);
 
         WriteIfAbsent(Path.Combine(root, WeftRoot.IgnoreFile), ignoreText, force);
         WriteIfAbsent(Path.Combine(root, WeftRoot.NeverFile), neverText, force);
 
-        Report(root, machine, reusedIdentity, import);
+        Report(root, machine, reusedIdentity, import, key, existingKey is not null);
         return Task.FromResult(0);
     }
 
@@ -69,7 +78,8 @@ internal static class InitCommand
         File.WriteAllText(path, content.TrimEnd() + "\n");
     }
 
-    private static void Report(string root, MachineIdentity machine, bool reusedIdentity, StIgnoreImport? import)
+    private static void Report(string root, MachineIdentity machine, bool reusedIdentity,
+        StIgnoreImport? import, WorkspaceKey key, bool keyExisted)
     {
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine($"[green]Workspace ready[/] [blue]{Markup.Escape(root)}[/]");
@@ -81,7 +91,24 @@ internal static class InitCommand
         t.AddRow("Machine", $"[bold]{Markup.Escape(machine.Name)}[/] [dim]{machine.Id}[/]"
             + (reusedIdentity ? "" : " [yellow](existing identity kept)[/]"));
         t.AddRow("Rules", $"[dim]{WeftRoot.IgnoreFile}, {WeftRoot.NeverFile}[/]");
+        t.AddRow("Workspace key", $"[dim]{key.Fingerprint()}[/]"
+            + (keyExisted ? " [dim](kept)[/]" : " [green](new)[/]"));
         AnsiConsole.Write(t);
+
+        if (!keyExisted)
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(new Panel(new Rows(
+                    new Markup("[bold]" + Markup.Escape(key.ToDisplayString()) + "[/]"),
+                    new Markup(""),
+                    new Markup("[dim]Every other machine on this workspace needs this exact key.[/]"),
+                    new Markup("[dim]Content is encrypted with it before it reaches the server, so the[/]"),
+                    new Markup("[dim]server cannot read your files, and cannot help you recover this.[/]"),
+                    new Markup(""),
+                    new Markup("[dim]On the next machine: [bold]weft key set <key>[/][/]")))
+                .Header("[yellow] Workspace key: write this down [/]")
+                .BorderColor(Color.Yellow));
+        }
 
         if (import is null)
         {
