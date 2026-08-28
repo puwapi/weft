@@ -16,8 +16,16 @@ public static class WeftVersion
     /// </remarks>
     public const int Protocol = 1;
 
-    /// <summary>This build.</summary>
-    public const string Build = "0.2.0";
+    /// <summary>
+    /// This build.
+    /// </summary>
+    /// <remarks>
+    /// Must match VersionPrefix in Directory.Build.props, which is what
+    /// 'weft --version' prints. A test enforces it. They drifted apart once and
+    /// the binary reported 1.0.0 while the server gated writes on 0.2.0: the
+    /// number a person could see was not the number being judged.
+    /// </remarks>
+    public const string Build = "0.3.0";
 
     /// <summary>Header carrying the oldest build the server will accept writes from.</summary>
     public const string MinClientHeader = "Weft-Min-Client";

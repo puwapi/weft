@@ -59,8 +59,20 @@ public sealed class MergeApplier(WeftRoot root, ObjectStore store)
         var conflicts = new List<string>();
         var notes = new List<(string, string)>();
 
+        // Paths that this filesystem cannot tell apart. A Linux machine can hold
+        // 'README.md' and 'readme.md' at once; on macOS and Windows they are one
+        // file, so writing both means the second silently replaces the first and
+        // one machine's content disappears with nothing to say so.
+        var colliding = CaseCollisions(outcome);
+
         foreach (var item in outcome.Items)
         {
+            if (colliding.Contains(item.Path))
+            {
+                conflicts.Add(item.Path);
+                continue;
+            }
+
             switch (item.Action)
             {
                 case MergeAction.Unchanged:
@@ -99,6 +111,65 @@ public sealed class MergeApplier(WeftRoot root, ObjectStore store)
             Conflicts = conflicts,
             Notes = notes,
         };
+    }
+
+    /// <summary>
+    /// Paths that differ only in case, on a filesystem that cannot tell them apart.
+    /// </summary>
+    /// <remarks>
+    /// Reported as conflicts rather than resolved. Picking one is a decision about
+    /// which machine's file survives, and weft has no basis for making it; writing
+    /// both in turn makes the decision anyway, by arrival order, and says nothing.
+    /// </remarks>
+    private HashSet<string> CaseCollisions(MergeOutcome outcome)
+        => FindCaseCollisions(outcome.Items, CaseInsensitive.Value);
+
+    /// <summary>Exposed so both branches can be checked without a second filesystem.</summary>
+    public static HashSet<string> FindCaseCollisions(IReadOnlyList<MergeItem> items, bool caseInsensitive)
+    {
+        if (!caseInsensitive) return [];
+
+        var groups = items
+            .Where(i => i.Action is MergeAction.TakeTheirs or MergeAction.Write or MergeAction.KeepOurs)
+            .GroupBy(i => i.Path, StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Select(i => i.Path).Distinct(StringComparer.Ordinal).Count() > 1);
+
+        return groups.SelectMany(g => g.Select(i => i.Path)).ToHashSet(StringComparer.Ordinal);
+    }
+
+    private Lazy<bool> CaseInsensitive => _caseInsensitive ??= new Lazy<bool>(ProbeCaseSensitivity);
+    private Lazy<bool>? _caseInsensitive;
+
+    /// <summary>
+    /// Asks the filesystem rather than the operating system.
+    /// </summary>
+    /// <remarks>
+    /// macOS is case-insensitive by default and case-sensitive when the volume was
+    /// formatted that way; Linux is usually sensitive but not on a mounted exFAT
+    /// share. Deciding from the OS name would be wrong on both, so a file is
+    /// written and looked for under another case.
+    /// </remarks>
+    private bool ProbeCaseSensitivity()
+    {
+        var name = "weft-case-probe-" + Guid.NewGuid().ToString("n");
+        var lower = Path.Combine(root.MetaPath, name);
+
+        try
+        {
+            Directory.CreateDirectory(root.MetaPath);
+            File.WriteAllBytes(lower, []);
+            return File.Exists(Path.Combine(root.MetaPath, name.ToUpperInvariant()));
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Cannot tell. Assumed insensitive, which only ever costs a conflict
+            // to resolve by hand; assuming the other way costs a lost file.
+            return true;
+        }
+        finally
+        {
+            try { if (File.Exists(lower)) File.Delete(lower); } catch (IOException) { }
+        }
     }
 
     /// <summary>

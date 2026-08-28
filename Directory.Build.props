@@ -1,5 +1,12 @@
 <Project>
   <PropertyGroup>
+    <!-- One version for the whole product. It reaches the binary through
+         VersionPrefix and the wire through WeftVersion.Build, and a test pins the
+         two together. They disagreed once: the binary reported 1.0.0 while the
+         server was gating writes on 0.2.0, so the number a person could see was
+         not the number being judged. -->
+    <VersionPrefix>0.3.0</VersionPrefix>
+
     <TargetFramework>net10.0</TargetFramework>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>

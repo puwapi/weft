@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, without the leading v'
+        required: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # NativeAOT cannot cross-compile, so there is one runner per target.
+          # That is the price of a binary with no runtime to install, and it is
+          # the right trade for a tool people are asked to put on three machines.
+          - { os: macos-latest,     rid: osx-arm64,   name: weft-macos-arm64 }
+          - { os: macos-13,         rid: osx-x64,     name: weft-macos-x64 }
+          - { os: ubuntu-latest,    rid: linux-x64,   name: weft-linux-x64 }
+          - { os: ubuntu-24.04-arm, rid: linux-arm64, name: weft-linux-arm64 }
+          - { os: windows-latest,   rid: win-x64,     name: weft-windows-x64 }
+          # Still a public preview, and not enabled on every account. Allowed to
+          # fail so a missing runner costs one architecture rather than the whole
+          # release.
+          - { os: windows-11-arm,   rid: win-arm64,   name: weft-windows-arm64, optional: true }
+
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional == true }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish
+        run: dotnet publish src/Weft.Cli -c Release -r ${{ matrix.rid }} -o ./out
+
+      - name: Name it and check it runs
+        shell: bash
+        run: |
+          mkdir -p dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            ./out/weft.exe --version
+            cp out/weft.exe "dist/${{ matrix.name }}.exe"
+          else
+            ./out/weft --version
+            cp out/weft "dist/${{ matrix.name }}"
+            chmod +x "dist/${{ matrix.name }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # Published beside the binaries so an installer can verify what it fetched.
+      # Without them, "curl | sh" is a promise that nothing went wrong in transit.
+      - name: Checksums
+        run: |
+          cd artifacts
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

@@ -10,4 +10,11 @@
     <PackageReference Include="System.IO.Hashing" Version="10.0.11" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Le test de la detection de dossier temporaire appelle un helper interne.
+         L'exposer publiquement en ferait une surface d'API pour une decision qui
+         appartient a Checkout. -->
+    <InternalsVisibleTo Include="Weft.Core.Tests" />
+  </ItemGroup>
+
 </Project>

@@ -61,14 +61,45 @@ against, that turns 1.8 million filesystem entries into 1 188 visited, in 9 ms.
 
 ## Install
 
-Requires [.NET 10](https://dotnet.microsoft.com/download) to build, and `git` on
-`PATH` to run. The published binary is native and needs no runtime installed.
+**macOS and Linux**
+
+```
+curl -fsSL https://raw.githubusercontent.com/puwapi/weft/main/install.sh | sh
+```
+
+**Windows**
+
+```
+irm https://raw.githubusercontent.com/puwapi/weft/main/install.ps1 | iex
+```
+
+Both verify the download against the checksums published with the release. Or
+take a binary from [the releases page](https://github.com/puwapi/weft/releases).
+
+| | x64 | arm64 |
+|---|---|---|
+| macOS | ✓ | ✓ |
+| Linux (glibc) | ✓ | ✓ |
+| Windows | ✓ | ✓ |
+
+The binary carries its own runtime and needs nothing installed. It does need
+**git** on `PATH`, which it never bundles: every repository operation is handed to
+your git, so hooks, credential helpers and config behave exactly as they already
+do. Alpine and other musl systems need a build from source.
+
+**[Read the tutorial →](docs/getting-started.md)** Two machines and a server, in
+about fifteen minutes.
+
+### Building
 
 ```
 git clone https://github.com/puwapi/weft && cd weft
 dotnet publish src/Weft.Cli -c Release -o ./publish
 ./publish/weft --help
 ```
+
+Requires [.NET 10](https://dotnet.microsoft.com/download). NativeAOT cannot
+cross-compile, so a binary must be built on the system it runs on.
 
 ## Use
 

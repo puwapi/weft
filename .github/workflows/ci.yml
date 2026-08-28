@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    # Built on all three, because the bugs this catches only exist on one of them.
+    # A case-insensitive filesystem, a temp directory that comes from an
+    # environment variable, a terminal that does not report its size: none of
+    # these show up if you only ever build where you wrote the code.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Build
+        run: dotnet build Weft.slnx -c Release
+
+      - name: Test
+        run: dotnet test Weft.slnx -c Release --no-build --verbosity normal
+
+      # Proves the binary really links on this platform. The tests run on the
+      # shared runtime and would not notice an AOT problem, which is a class of
+      # failure that only appears in the artefact users actually download.
+      - name: Publish the native binary
+        run: dotnet publish src/Weft.Cli -c Release -o ./out
+
+      - name: Run it
+        run: ./out/weft --version
+        if: runner.os != 'Windows'
+
+      - name: Run it (Windows)
+        run: ./out/weft.exe --version
+        if: runner.os == 'Windows'
+
+  # The install scripts are the first thing a stranger runs, and a syntax error in
+  # one of them is a broken front door. Checked here because neither can be parsed
+  # on the machine they were written on.
+  installers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: shellcheck install.sh
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --shell=sh install.sh
+
+      - name: parse install.ps1
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            "$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
+          Write-Host "install.ps1 parses"

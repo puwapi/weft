@@ -1,0 +1,317 @@
+# Getting started
+
+Walk this once, on two machines, and you will have a monorepo that stays in step.
+It takes about fifteen minutes, most of which is the server.
+
+---
+
+## What you need
+
+- **git**, on every machine. weft never bundles it and never will: it hands every
+  repository operation to your git, so hooks, credential helpers and config all
+  behave exactly as they already do.
+- **A place to run the server.** Anything that runs Docker and that all your
+  machines can reach. It holds encrypted blobs and never sees your key.
+- Nothing else. The binary carries its own runtime.
+
+---
+
+## 1. Install
+
+### macOS and Linux
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/puwapi/weft/main/install.sh | sh
+```
+
+It works out your system and architecture, verifies the download against the
+checksums published with the release, and puts `weft` in `/usr/local/bin` if that
+is writable or `~/.local/bin` otherwise.
+
+To choose for yourself:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/puwapi/weft/main/install.sh \
+  | WEFT_BIN_DIR=~/bin WEFT_VERSION=v0.3.0 sh
+```
+
+### Windows
+
+```powershell
+irm https://raw.githubusercontent.com/puwapi/weft/main/install.ps1 | iex
+```
+
+Installs to `%LOCALAPPDATA%\weft\bin` and adds it to your user PATH. No elevation,
+and nothing changes for anyone else on the machine. Open a new terminal
+afterwards so the PATH change takes effect.
+
+### By hand
+
+Download the binary for your platform from
+[the releases page](https://github.com/puwapi/weft/releases), make it executable,
+and put it somewhere on your PATH. The names are `weft-<os>-<arch>`.
+
+### Check it
+
+```bash
+weft --version
+```
+
+---
+
+## 2. Your first machine
+
+Go to the directory that **holds** your repositories. Not into one of them:
+weft manages what is between and around them.
+
+```bash
+cd ~/projects/mymonorepo
+weft init
+```
+
+Three things happen.
+
+**A workspace is created.** `.weft/` holds the object store and this machine's
+bookkeeping.
+
+**Two rule files appear.** `.weftignore` is cleanliness, `.weftnever` is
+confidentiality. They are described in the [README](../README.md#rules); the
+defaults are sensible and you can edit them later.
+
+> If a `.stignore` is already there, weft imports it, including rules whose only
+> clue that they are sensitive is the comment above them. Every reclassification
+> is printed so you can move one back.
+
+**A workspace key is printed, once.**
+
+```
+┌─ Workspace key: write this down ──────────────────────────────────┐
+│ weft-QKVD6PTC-G75P1ZRM-NY8VV59T-HXQ3Q5E7-PV44SJ2T-35PQNDJ4-184G   │
+└───────────────────────────────────────────────────────────────────┘
+```
+
+**Write it down now.** Your files are encrypted with it before they reach the
+server, so the server cannot read them and cannot help you recover it. Every
+other machine needs this exact key. You can print it again with
+`weft key show --reveal`, but only from a machine that already has it.
+
+### See what weft sees
+
+```bash
+weft scan
+```
+
+Repositories, working trees, loose files, and anything refused as confidential.
+It also flags trees that are **at risk**: worktrees in a temp directory the OS
+may reclaim, or outside the workspace where weft cannot reach them.
+
+### Record it
+
+```bash
+weft snapshot
+```
+
+This captures the loose files and, by default, the **uncommitted work** in every
+checkout. That is the safety net: a branch that lives on one disk stops being
+invisible everywhere else.
+
+```bash
+weft carry
+```
+
+Answers the question directly: does this work exist anywhere but here?
+
+---
+
+## 3. Put up a server
+
+One container, one volume, no database to run.
+
+```bash
+git clone https://github.com/puwapi/weft && cd weft
+cp .env.example .env
+```
+
+Edit `.env` and set a join secret. Machines present it once, when they enrol:
+
+```bash
+openssl rand -hex 32
+```
+
+Then:
+
+```bash
+docker compose up -d
+```
+
+The server refuses to start without a join secret, rather than running as
+something nobody can join.
+
+Put it behind whatever gives you TLS. It speaks plain HTTP on 8080 and expects a
+reverse proxy in front. **Use HTTPS**: your content is encrypted either way, but
+the enrolment secret and the machine tokens are not.
+
+Check it:
+
+```bash
+curl https://weft.example.com/v1/info
+```
+
+---
+
+## 4. Connect the first machine
+
+```bash
+weft remote add https://weft.example.com --join <the-secret>
+weft push
+```
+
+`remote add` exchanges the join secret for a token belonging to this machine
+alone. That token, not the secret, is what every later request carries, so losing
+one machine does not mean rotating everything.
+
+---
+
+## 5. Your second machine
+
+Install weft, then:
+
+```bash
+cd ~/projects
+mkdir mymonorepo && cd mymonorepo
+
+weft init
+weft key set weft-QKVD6PTC-...        # the key from the first machine
+weft remote add https://weft.example.com --join <the-secret>
+weft pull
+weft merge
+```
+
+`weft init` on this machine generates its own key, which is the wrong one.
+`weft key set` replaces it. If you skip that step, `remote add` refuses:
+
+```
+That server holds a different workspace.
+Server: a23c4821b650   here: 5341b0471f3f
+```
+
+Caught at enrolment rather than after the first push, because a machine with the
+wrong key uploads objects nobody else can read and the mistake surfaces much
+later, on somebody else's machine.
+
+After `weft merge`, your files are there.
+
+---
+
+## 6. Day to day
+
+On the machine you have been working on:
+
+```bash
+weft snapshot && weft push
+```
+
+On the other one:
+
+```bash
+weft pull && weft merge
+```
+
+`pull` fetches; `merge` reconciles. They are separate so a merge cannot
+half-finish because a connection dropped, and so you can merge on a train.
+
+Most differences never reach you. When one does:
+
+```bash
+weft tui
+```
+
+opens on the conflicts, shows both versions side by side, and settles them with
+one key. Or handle it in your editor: the file is untouched and still working,
+your version is in it, and theirs is beside it as `<file>.weft-theirs`. Delete
+that companion to say you are done, then `weft merge --continue`.
+
+### Carrying work in progress
+
+```bash
+# where you were working
+weft snapshot && weft push
+
+# on the other machine
+weft pull
+weft land --dry-run     # what would happen
+weft land               # apply it
+```
+
+`land` refuses a checkout that already has uncommitted changes, refuses one on a
+different commit unless you pass `--3way`, and checks the patch before writing
+anything. It is never automatic: applying a patch to a working tree on its own is
+how you destroy whatever was going on there.
+
+---
+
+## Platform notes
+
+Everything works the same on all three, with four differences worth knowing.
+
+**Case.** macOS and Windows cannot tell `README.md` from `readme.md`; Linux can.
+If a Linux machine holds both, weft reports them as a conflict on the others
+rather than writing one over the other. It probes the filesystem rather than
+trusting the OS name, because macOS can be case-sensitive and a mounted share can
+be either.
+
+**The executable bit** travels; read and write permissions do not. They belong to
+the account that will hold the file, and copying them between machines with
+different users is how a synchroniser makes files unreadable on arrival. On
+Windows the bit is simply absent, which is correct.
+
+**Line endings** are preserved. A CRLF file stays CRLF, and a merge does not
+rewrite every line of it.
+
+**The workspace key file.** On macOS and Linux it is written `0600`. On Windows it
+inherits the ACL of the directory it is in, which under your user profile is
+private to you. If you put a workspace somewhere shared, the key is only as
+protected as that directory.
+
+**Alpine and other musl systems** need a build from source: the published Linux
+binaries link against glibc. The installer detects this and says so rather than
+letting the download fail at exec time.
+
+---
+
+## Where things live
+
+| | |
+|---|---|
+| `.weft/` | object store, this machine's HEAD, the key, the server token |
+| `.weftignore` | what regenerates. Overridable. |
+| `.weftnever` | what is confidential. Not overridable, not by `--force`. |
+| `~/.weft/machine.json` | this machine's identity, shared by every workspace on it |
+
+The key and the server token are written owner-only. The identity is a random
+UUIDv7, never derived from the hostname: a hostname changes, two machines can
+share one, and cloned virtual machines share both.
+
+---
+
+## When something goes wrong
+
+**`weft push` says the build is too old.** The server refuses writes below a
+version floor. Reads are never blocked, so you can still fetch your own work.
+Update and try again.
+
+**`weft merge` says objects are missing.** Run `weft pull` first: merge
+reconciles what is already here and never goes to the network.
+
+**A snapshot is refused for a credential.** Something in your uncommitted work
+looks like a key. The message names the file and the line, with the secret masked.
+Take it out, or run `weft snapshot --no-carry` to record everything except
+uncommitted work. It blocks rather than warns because a blocked snapshot is fixed
+in seconds and a key that reached the server is not.
+
+**`weft tui` says it needs a terminal.** Its input or output is redirected. Every
+other command works in a pipe.
+
+**Nothing is ever lost.** Every version that has been snapshotted is in the object
+store, addressable and restorable. A bad merge, a wrong resolution, a file taken
+from the wrong machine: all recoverable.

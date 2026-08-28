@@ -36,17 +36,34 @@ public sealed record Checkout
     /// directory, each on its own feature branch. That is the "work that exists
     /// in one place and nothing knows it" failure, waiting for a reboot.
     /// </remarks>
-    public bool IsVolatile
+    public bool IsVolatile => IsUnderTemp(AbsolutePath);
+
+    /// <summary>
+    /// Whether a path sits under somewhere the system reclaims.
+    /// </summary>
+    /// <remarks>
+    /// The current process's temp directory is asked for rather than assumed,
+    /// because on Windows it comes from TEMP and differs per user, and on macOS
+    /// it is a per-session path under /var/folders that no constant could name.
+    /// The fixed locations are kept as well: a checkout can be under a temp
+    /// directory belonging to a different user or to the system.
+    /// </remarks>
+    internal static bool IsUnderTemp(string path)
     {
-        get
-        {
-            var p = AbsolutePath;
-            return p.StartsWith("/tmp/", StringComparison.Ordinal)
-                || p.StartsWith("/var/folders/", StringComparison.Ordinal)
-                || p.StartsWith("/private/var/folders/", StringComparison.Ordinal)
-                || p.StartsWith("/private/tmp/", StringComparison.Ordinal)
-                || p.Contains(@"\AppData\Local\Temp\", StringComparison.OrdinalIgnoreCase);
-        }
+        var comparison = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        var here = Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar);
+        if (here.Length > 1 && path.StartsWith(here + Path.DirectorySeparatorChar, comparison)) return true;
+
+        string[] wellKnown = OperatingSystem.IsWindows()
+            ? [@"\AppData\Local\Temp\", @"\Windows\Temp\"]
+            : ["/tmp/", "/var/tmp/", "/var/folders/", "/private/tmp/", "/private/var/folders/"];
+
+        return OperatingSystem.IsWindows()
+            ? wellKnown.Any(w => path.Contains(w, comparison))
+            : wellKnown.Any(w => path.StartsWith(w, comparison));
     }
 
     /// <summary>Display name: the relative path inside the root, otherwise the absolute one.</summary>

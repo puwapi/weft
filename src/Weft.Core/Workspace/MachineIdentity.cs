@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -34,8 +35,26 @@ public sealed record MachineIdentity(
     public static MachineIdentity Mint(string? name = null) => new(
         Guid.CreateVersion7().ToString("n"),
         string.IsNullOrWhiteSpace(name) ? SafeHostName() : name.Trim(),
-        $"{Environment.OSVersion.Platform} {(Environment.Is64BitProcess ? "x64" : "x86")}",
+        Describe(),
         DateTimeOffset.UtcNow);
+
+    /// <summary>
+    /// A platform string a person can read.
+    /// </summary>
+    /// <remarks>
+    /// Environment.OSVersion.Platform returns "Unix" for macOS and for Linux
+    /// alike, so a machines table showing it tells you nothing about which is
+    /// which, which is exactly what the column is for.
+    /// </remarks>
+    private static string Describe()
+    {
+        var os = OperatingSystem.IsMacOS() ? "macos"
+               : OperatingSystem.IsWindows() ? "windows"
+               : OperatingSystem.IsLinux() ? "linux"
+               : "unknown";
+
+        return $"{os}-{RuntimeInformation.OSArchitecture.ToString().ToLowerInvariant()}";
+    }
 
     private static string SafeHostName()
     {
