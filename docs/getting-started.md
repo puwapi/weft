@@ -275,8 +275,13 @@ the account that will hold the file, and copying them between machines with
 different users is how a synchroniser makes files unreadable on arrival. On
 Windows the bit is simply absent, which is correct.
 
-**Line endings** are preserved. A CRLF file stays CRLF, and a merge does not
-rewrite every line of it.
+**Line endings.** For loose files, weft preserves what it found: a CRLF file
+stays CRLF, and a merge does not rewrite every line of it.
+
+Inside a repository, git decides, as it should. With `core.autocrlf` on, which is
+the Windows default, work carried from a Mac lands with CRLF endings. That is git
+honouring your configuration, and weft hands it the patch precisely so that it
+can.
 
 **The workspace key file.** On macOS and Linux it is written `0600`. On Windows it
 inherits the ACL of the directory it is in, which under your user profile is

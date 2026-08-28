@@ -64,6 +64,8 @@ public sealed class WorkCaptureTests : IDisposable
 
     private static string Text(WorkPatch p) => Encoding.UTF8.GetString(p.Patch);
 
+    private static string Normalise(string text) => text.Replace("\r\n", "\n");
+
     [Fact]
     public async Task A_clean_checkout_carries_nothing()
         => Assert.Null(await _capture.CaptureAsync(At(await RepoAsync("clean"))));
@@ -184,8 +186,14 @@ public sealed class WorkCaptureTests : IDisposable
         var apply = await _capture.ApplyAsync(target, patch.Patch, threeWay: false);
         Assert.True(apply.Ok, apply.StdErr);
 
-        Assert.Equal("line 1 CHANGED\nline 2\n", File.ReadAllText(Path.Combine(target, "tracked.txt")));
-        Assert.Equal("export const x = 1;\n", File.ReadAllText(Path.Combine(target, "brand-new.ts")));
+        // Compared with line endings normalised, because git is allowed to change
+        // them and does: with core.autocrlf on, which is the Windows default, a
+        // patch written in LF lands as CRLF. That is correct, and it is the point
+        // of handing the work to git rather than applying patches ourselves. An
+        // assertion on the exact bytes would be asserting that weft overrides the
+        // user's git config, which it must not.
+        Assert.Equal("line 1 CHANGED\nline 2\n", Normalise(File.ReadAllText(Path.Combine(target, "tracked.txt"))));
+        Assert.Equal("export const x = 1;\n", Normalise(File.ReadAllText(Path.Combine(target, "brand-new.ts"))));
     }
 
     [Fact]
