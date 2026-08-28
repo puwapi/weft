@@ -46,6 +46,26 @@ jobs:
         run: ./out/weft.exe --version
         if: runner.os == 'Windows'
 
+  # A file the .gitignore swallows still compiles here and does not exist on a
+  # clone, so the build passes locally and fails in CI with a namespace that is
+  # not there. It happened: '[Rr]elease/', a pattern meant for build output,
+  # matched src/Weft.Core/Release/ and quietly dropped seven files from a commit.
+  tracked:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: No source file is ignored
+        run: |
+          ignored=$(git status --ignored --short src tests \
+            | grep '^!!' | grep -vE '(bin|obj)/$' || true)
+          if [ -n "$ignored" ]; then
+            echo "These are ignored by .gitignore but look like source:"
+            echo "$ignored"
+            exit 1
+          fi
+          echo "nothing under src/ or tests/ is ignored except build output"
+
   # The install scripts are the first thing a stranger runs, and a syntax error in
   # one of them is a broken front door. Checked here because neither can be parsed
   # on the machine they were written on.

@@ -1,8 +1,12 @@
-# .NET build output
+# .NET build output.
+#
+# 'bin/' and 'obj/' already cover everything the SDK emits, and the usual
+# '[Dd]ebug/' and '[Rr]elease/' lines are not only redundant but harmful: they
+# match ANY directory of that name. src/Weft.Core/Release/ was silently dropped
+# from a commit by them, so the build passed here and failed on CI with a
+# namespace that does not exist.
 bin/
 obj/
-[Dd]ebug/
-[Rr]elease/
 *.user
 *.suo
 TestResults/
