@@ -87,3 +87,79 @@ jobs:
             "$PWD/install.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors | ForEach-Object { Write-Error $_.Message }; exit 1 }
           Write-Host "install.ps1 parses"
+
+  # Parsing proves the front door is not nailed shut. It does not prove it opens,
+  # and neither script had ever been run by anything: the checksum block had been
+  # passing over every download in silence, which parses perfectly. It is also
+  # what disproved the first diagnosis of this bug, which had been written into a
+  # commit message before anything measured it.
+  #
+  # These install a published RELEASE, not the commit under test. That is the
+  # point: what is checked here is the front door, not the binary behind it.
+  #
+  # The version is pinned by `gh` rather than discovered by the installer.
+  # Discovery is an unauthenticated API call, and runners share egress addresses
+  # that have often already spent the hour's sixty anonymous requests: the macOS
+  # leg failed on exactly that the first time this ran. A job that fails on
+  # somebody else's traffic teaches you to ignore it.
+  install-unix:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install and run
+        run: |
+          WEFT_VERSION=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          export WEFT_VERSION
+          WEFT_BIN_DIR="$HOME/weft-ci" sh install.sh
+          "$HOME/weft-ci/weft" --version
+
+  install-windows:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both shells, because they are not the same product: `pwsh` is what CI
+      # reaches for, `powershell` is Windows PowerShell 5.1 and is what a person
+      # gets from the Start menu, and the failure this job exists to catch lived
+      # only in the second. Two steps rather than a matrix because `shell:`
+      # accepts no expression at all, not even `matrix`.
+      - name: Install under Windows PowerShell 5.1
+        shell: powershell
+        run: |
+          $env:WEFT_VERSION = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+          if (-not $env:WEFT_VERSION) { throw 'could not resolve the release tag' }
+          $env:WEFT_BIN_DIR = Join-Path $env:RUNNER_TEMP 'weft-ci'
+          # Through iex rather than as a file, because that is how it is
+          # delivered: it runs in the caller's session, where `exit` closes the
+          # window and a preference left behind is left behind for good.
+          Get-Content .\install.ps1 -Raw | Invoke-Expression
+          # No directory here on purpose: this resolves only because the
+          # installer put one on this session's PATH.
+          weft --version
+
+      # The same script, the other product, and over the top of the first
+      # install: replacing a binary that is already there, and not leaving a
+      # second copy of the same PATH entry behind, are both things it has to get
+      # right and neither happens on a clean machine.
+      - name: Install again under PowerShell 7
+        shell: pwsh
+        run: |
+          $env:WEFT_VERSION = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+          if (-not $env:WEFT_VERSION) { throw 'could not resolve the release tag' }
+          $env:WEFT_BIN_DIR = Join-Path $env:RUNNER_TEMP 'weft-ci'
+          Get-Content .\install.ps1 -Raw | Invoke-Expression
+          weft --version
+
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $entries = ([string] $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';'
+          $mine = @($entries | Where-Object { $_ -eq $env:WEFT_BIN_DIR })
+          if ($mine.Count -ne 1) { throw "the user PATH holds $($mine.Count) copies of $env:WEFT_BIN_DIR" }
+          Write-Host "the user PATH holds exactly one entry for it"
