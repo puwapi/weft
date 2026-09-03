@@ -41,12 +41,17 @@ $ProgressPreference = 'SilentlyContinue'
 try {
     # --- what are we on ---
 
-    # Not [System.Runtime.InteropServices.RuntimeInformation]: that type lives in
-    # a facade assembly Windows PowerShell 5.1 does not load, so asking it for the
-    # architecture fails there with "Unable to find type" before anything is
-    # downloaded at all. 5.1 is still what `powershell.exe` is on every Windows,
-    # and it is what you get by pasting a command into the Start menu. These two
-    # variables come from the operating system and exist in every shell.
+    # Read from the environment rather than from
+    # [System.Runtime.InteropServices.RuntimeInformation]. That type lives in a
+    # facade assembly rather than in mscorlib, and Windows PowerShell only sees
+    # types from assemblies that are already loaded, which is a thin thing to rest
+    # the second statement of an installer on.
+    #
+    # It does resolve on a current Windows: a 5.1.26100 runner answers X64,
+    # measured rather than assumed, so this is portability and not a bug fix. Do
+    # not put the type back on the strength of that one measurement either.
+    #
+    # These two variables are set by the operating system and are in every shell.
     # ARCHITEW6432 is the one that tells the truth when a 32-bit shell runs on a
     # 64-bit Windows, where PROCESSOR_ARCHITECTURE only ever says x86.
     $machine = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 }
