@@ -45,11 +45,16 @@ Installs to `%LOCALAPPDATA%\weft\bin` and adds it to your user PATH. No elevatio
 and nothing changes for anyone else on the machine. Open a new terminal
 afterwards so the PATH change takes effect.
 
+The `curl | sh` line above also works from Git Bash, MSYS2 or Cygwin. It installs
+the same Windows binary into `~/bin`, which is on the PATH of that shell and of
+no other, so use the PowerShell line if you want `weft` from cmd as well.
+
 ### By hand
 
 Download the binary for your platform from
 [the releases page](https://github.com/puwapi/weft/releases), make it executable,
-and put it somewhere on your PATH. The names are `weft-<os>-<arch>`.
+and put it somewhere on your PATH. The names are `weft-<os>-<arch>`, and
+`weft-windows-<arch>.exe` on Windows.
 
 ### Check it
 
