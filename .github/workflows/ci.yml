@@ -94,23 +94,35 @@ jobs:
   # so the installer died before its first download on the shell most people
   # actually have. Neither script had ever been run by anything.
   #
-  # These install the latest RELEASE, not the commit under test. That is the
+  # These install a published RELEASE, not the commit under test. That is the
   # point: what is checked here is the front door, not the binary behind it.
+  #
+  # The version is pinned by `gh` rather than discovered by the installer.
+  # Discovery is an unauthenticated API call, and runners share egress addresses
+  # that have often already spent the hour's sixty anonymous requests: the macOS
+  # leg failed on exactly that the first time this ran. A job that fails on
+  # somebody else's traffic teaches you to ignore it.
   install-unix:
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - name: Install and run
         run: |
+          WEFT_VERSION=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          export WEFT_VERSION
           WEFT_BIN_DIR="$HOME/weft-ci" sh install.sh
           "$HOME/weft-ci/weft" --version
 
   install-windows:
     runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
 
@@ -122,6 +134,8 @@ jobs:
       - name: Install under Windows PowerShell 5.1
         shell: powershell
         run: |
+          $env:WEFT_VERSION = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+          if (-not $env:WEFT_VERSION) { throw 'could not resolve the release tag' }
           $env:WEFT_BIN_DIR = Join-Path $env:RUNNER_TEMP 'weft-ci'
           # Through iex rather than as a file, because that is how it is
           # delivered: it runs in the caller's session, where `exit` closes the
@@ -138,6 +152,8 @@ jobs:
       - name: Install again under PowerShell 7
         shell: pwsh
         run: |
+          $env:WEFT_VERSION = gh release view --repo $env:GITHUB_REPOSITORY --json tagName --jq .tagName
+          if (-not $env:WEFT_VERSION) { throw 'could not resolve the release tag' }
           $env:WEFT_BIN_DIR = Join-Path $env:RUNNER_TEMP 'weft-ci'
           Get-Content .\install.ps1 -Raw | Invoke-Expression
           weft --version
