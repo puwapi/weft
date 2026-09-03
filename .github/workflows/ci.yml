@@ -110,24 +110,40 @@ jobs:
           "$HOME/weft-ci/weft" --version
 
   install-windows:
-    strategy:
-      fail-fast: false
-      matrix:
-        # Both shells, because they are not the same product. `pwsh` is what CI
-        # reaches for and `powershell` is what a person gets from the Start menu,
-        # and the failure this job exists to catch lived only in the second.
-        shell: [powershell, pwsh]
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install and run
-        shell: ${{ matrix.shell }}
+
+      # Both shells, because they are not the same product: `pwsh` is what CI
+      # reaches for, `powershell` is Windows PowerShell 5.1 and is what a person
+      # gets from the Start menu, and the failure this job exists to catch lived
+      # only in the second. Two steps rather than a matrix because `shell:`
+      # accepts no expression at all, not even `matrix`.
+      - name: Install under Windows PowerShell 5.1
+        shell: powershell
         run: |
           $env:WEFT_BIN_DIR = Join-Path $env:RUNNER_TEMP 'weft-ci'
           # Through iex rather than as a file, because that is how it is
           # delivered: it runs in the caller's session, where `exit` closes the
           # window and a preference left behind is left behind for good.
           Get-Content .\install.ps1 -Raw | Invoke-Expression
-          # No `Join-Path` here on purpose: this resolves only because the
-          # installer put the directory on this session's PATH.
+          # No directory here on purpose: this resolves only because the
+          # installer put one on this session's PATH.
           weft --version
+
+      # The same script, the other product, and over the top of the first
+      # install: replacing a binary that is already there, and not leaving a
+      # second copy of the same PATH entry behind, are both things it has to get
+      # right and neither happens on a clean machine.
+      - name: Install again under PowerShell 7
+        shell: pwsh
+        run: |
+          $env:WEFT_BIN_DIR = Join-Path $env:RUNNER_TEMP 'weft-ci'
+          Get-Content .\install.ps1 -Raw | Invoke-Expression
+          weft --version
+
+          $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment')
+          $entries = ([string] $key.GetValue('Path', '', 'DoNotExpandEnvironmentNames')) -split ';'
+          $mine = @($entries | Where-Object { $_ -eq $env:WEFT_BIN_DIR })
+          if ($mine.Count -ne 1) { throw "the user PATH holds $($mine.Count) copies of $env:WEFT_BIN_DIR" }
+          Write-Host "the user PATH holds exactly one entry for it"
