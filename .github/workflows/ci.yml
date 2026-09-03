@@ -131,6 +131,19 @@ jobs:
       # gets from the Start menu, and the failure this job exists to catch lived
       # only in the second. Two steps rather than a matrix because `shell:`
       # accepts no expression at all, not even `matrix`.
+      # TEMPORARY probe: settles whether the diagnosis is right before it is
+      # written down anywhere durable. Removed in the next commit.
+      - name: Does 5.1 resolve RuntimeInformation?
+        shell: powershell
+        run: |
+          "edition: $($PSVersionTable.PSEdition)  version: $($PSVersionTable.PSVersion)"
+          try {
+            $a = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture
+            "RESOLVED: $a"
+          } catch {
+            "DID NOT RESOLVE: $($_.Exception.Message)"
+          }
+
       - name: Install under Windows PowerShell 5.1
         shell: powershell
         run: |
