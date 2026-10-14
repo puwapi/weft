@@ -189,6 +189,7 @@ internal static class RemoteCommands
             t.AddColumn("Platform");
             t.AddColumn("Last seen");
             t.AddColumn("State");
+            t.AddColumn("Pins");
 
             foreach (var h in heads.OrderBy(h => h.MachineName, StringComparer.Ordinal))
             {
@@ -198,12 +199,22 @@ internal static class RemoteCommands
                     $"[dim]{Markup.Escape(h.MachineId)}[/]",
                     Markup.Escape(h.Platform),
                     Ago(h.LastSeenUtc),
-                    h.RevokedUtc is null ? "[green]enrolled[/]" : $"[red]revoked[/] [dim]{Ago(h.RevokedUtc.Value)}[/]");
+                    h.RevokedUtc is null ? "[green]enrolled[/]" : $"[red]revoked[/] [dim]{Ago(h.RevokedUtc.Value)}[/]",
+                    h.Pinned switch
+                    {
+                        true => "[green]declared[/]",
+                        false => "[yellow]needs a push[/]",
+                        null => "[dim]-[/]",
+                    });
             }
 
             AnsiConsole.Write(t);
             AnsiConsole.WriteLine();
             AnsiConsole.MarkupLine("[dim]Withdraw one with [bold]weft remote revoke <id> --join <secret>[/].[/]");
+            if (heads.Any(h => h.Pinned == false))
+                AnsiConsole.MarkupLine("[dim]A machine that [yellow]needs a push[/] last pushed with a client that does "
+                    + "not say what its head needs. [bold]weft remote gc[/] refuses to run until it pushes again "
+                    + "with this version.[/]");
             return 0;
         }
     }
@@ -253,6 +264,79 @@ internal static class RemoteCommands
         }
     }
 
+    /// <summary>
+    /// Asks the server to move objects no head needs into its trash.
+    /// </summary>
+    /// <remarks>
+    /// A dry run unless <paramref name="apply"/> is set, and it says so on every
+    /// run, because a report that reads like an action is how someone concludes
+    /// the space was already reclaimed.
+    /// </remarks>
+    public static async Task<int> RemoteGcAsync(
+        string? rootOverride, string joinSecret, bool apply, int? retainDays, CancellationToken ct)
+    {
+        var s = Prepare(rootOverride);
+        if (s is null) return 1;
+        var (_, client) = s.Value;
+
+        using (client)
+        {
+            GcResponse r;
+            try { r = await client.GcAsync(new GcRequest(joinSecret, apply, retainDays), ct).ConfigureAwait(false); }
+            catch (RemoteException e) when (e.Status == System.Net.HttpStatusCode.NotFound)
+            {
+                AnsiConsole.WriteLine();
+                AnsiConsole.MarkupLine("[red]This server has no garbage collection.[/] [dim]Upgrade it first.[/]");
+                return 1;
+            }
+            catch (Exception e) when (e is RemoteException or HttpRequestException) { return Fail(e); }
+
+            AnsiConsole.WriteLine();
+
+            if (r.Refused)
+            {
+                AnsiConsole.MarkupLine("[red]Refused: the server cannot tell what these machines' heads need.[/]");
+                foreach (var m in r.Unpinned)
+                    AnsiConsole.MarkupLine($"  {Markup.Escape(m.MachineName)} [dim]{Markup.Escape(m.MachineId)}[/]");
+                AnsiConsole.MarkupLine("[dim]Each one last pushed with a client that does not declare its pins. "
+                    + "Run [bold]weft push[/] there with this version, then try again. Collecting now would "
+                    + "risk deleting what those heads point to.[/]");
+                return 1;
+            }
+
+            var t = new Table().Border(TableBorder.Rounded).HideHeaders();
+            t.AddColumn("");
+            t.AddColumn(new TableColumn("").RightAligned());
+            t.AddRow("Heads kept", $"{r.LiveHeads} [dim](current, and superseded within {r.RetainDays:0.#} d)[/]");
+            t.AddRow("Objects they need", r.LiveObjects.ToString());
+            t.AddRow("Unreferenced, spared as recent", r.KeptYoung.ToString());
+            t.AddRow(r.Applied ? "[bold]Moved to trash[/]" : "[bold]Would move to trash[/]",
+                $"[bold]{r.Candidates}[/] [dim]({Bytes(r.CandidateBytes)})[/]");
+            AnsiConsole.Write(t);
+
+            if (r.UnretainableHeads > 0)
+                AnsiConsole.MarkupLine($"[yellow]{r.UnretainableHeads} superseded head(s) inside the window were "
+                    + "pushed without pins.[/] [dim]The window cannot hold what they needed; only the current "
+                    + "heads and the backups do.[/]");
+
+            AnsiConsole.WriteLine();
+            if (!r.Applied)
+            {
+                AnsiConsole.MarkupLine("[dim]Dry run: nothing moved. Pass [bold]--apply[/] to do it.[/]");
+                return 0;
+            }
+
+            AnsiConsole.MarkupLine(r.Stamp is null
+                ? "[green]Nothing to collect.[/]"
+                : $"[green]Done.[/] [dim]Objects are in the server's trash/{Markup.Escape(r.Stamp)}, deleted for "
+                  + $"good after {r.TrashDays:0.#} d. Moving that directory's contents back into objects/ "
+                  + "undoes it.[/]");
+            if (r.PurgedStamps > 0)
+                AnsiConsole.MarkupLine($"[dim]{r.PurgedStamps} older trash stamp(s) deleted.[/]");
+            return 0;
+        }
+    }
+
     // ---------- push and pull ----------
 
     public static async Task<int> PushAsync(string? rootOverride, CancellationToken ct)
@@ -283,12 +367,17 @@ internal static class RemoteCommands
             {
                 AnsiConsole.MarkupLine($"[dim]The server already had everything for[/] "
                     + $"[blue]{result.Snapshot.ToString()[..12]}[/][dim]. Pointer moved.[/]");
-                return 0;
+            }
+            else
+            {
+                AnsiConsole.MarkupLine($"[green]Pushed[/] [blue]{result.Snapshot.ToString()[..12]}[/]");
+                AnsiConsole.MarkupLine($"[dim]{result.ObjectsUploaded} of {result.ObjectsConsidered} objects sent, "
+                    + $"{Bytes(result.BytesUploaded)} in {result.ElapsedMs} ms[/]");
             }
 
-            AnsiConsole.MarkupLine($"[green]Pushed[/] [blue]{result.Snapshot.ToString()[..12]}[/]");
-            AnsiConsole.MarkupLine($"[dim]{result.ObjectsUploaded} of {result.ObjectsConsidered} objects sent, "
-                + $"{Bytes(result.BytesUploaded)} in {result.ElapsedMs} ms[/]");
+            if (!result.Pinned)
+                AnsiConsole.MarkupLine("[dim]The server predates push sessions, so it was not told what this head "
+                    + "needs. Nothing changes until it is upgraded.[/]");
             return 0;
         }
     }

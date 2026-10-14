@@ -28,6 +28,15 @@ services:
       Weft__MinClient: "${WEFT_MIN_CLIENT:-0.0.0}"
 
       Weft__MaxObjectBytes: "${WEFT_MAX_OBJECT_BYTES:-67108893}"
+
+      # Garbage collection ('weft remote gc'). How long a superseded head keeps
+      # what it pinned, how long a fresh unreferenced object is spared, how long
+      # an unfinished push protects what it named, and how long collected objects
+      # wait in trash/ before they are deleted for good. See docs/gc.md.
+      Weft__RetainDays: "${WEFT_RETAIN_DAYS:-14}"
+      Weft__GraceHours: "${WEFT_GRACE_HOURS:-24}"
+      Weft__SessionTtlHours: "${WEFT_SESSION_TTL_HOURS:-24}"
+      Weft__TrashDays: "${WEFT_TRASH_DAYS:-7}"
     volumes:
       - weft-data:/data
     ports:

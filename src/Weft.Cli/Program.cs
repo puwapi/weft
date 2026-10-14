@@ -105,9 +105,24 @@ internal static class Program
         remoteRevoke.SetAction((pr, ct) => RemoteCommands.RemoteRevokeAsync(
             pr.GetValue(revokeRoot), pr.GetValue(revokeId)!, pr.GetValue(revokeJoin)!, ct));
 
+        var gcJoin = new Option<string>("--join")
+        {
+            Description = "Join secret. Collection deletes, so it takes the operator's credential, not a machine token.",
+            Required = true,
+        };
+        var gcApply = new Option<bool>("--apply") { Description = "Move the objects to trash. Without it, only report." };
+        var gcRetain = new Option<int?>("--retain-days") { Description = "Keep superseded heads this many days, for this run only." };
+        var gcRoot = new Option<string?>("--root", "-C") { Description = "Workspace directory." };
+        var remoteGc = new Command("gc", "Move objects no head needs into the server's trash. Reports only, unless --apply.")
+        {
+            gcJoin, gcApply, gcRetain, gcRoot,
+        };
+        remoteGc.SetAction((pr, ct) => RemoteCommands.RemoteGcAsync(
+            pr.GetValue(gcRoot), pr.GetValue(gcJoin)!, pr.GetValue(gcApply), pr.GetValue(gcRetain), ct));
+
         var remote = new Command("remote", "The server this workspace syncs with.")
         {
-            remoteAdd, remoteMachines, remoteRevoke,
+            remoteAdd, remoteMachines, remoteRevoke, remoteGc,
         };
 
         // ---- push and pull ----

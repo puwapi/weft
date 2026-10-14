@@ -204,6 +204,35 @@ disk, along with every object it already fetched. If it is in someone else's
 hands, the answer is a new key on the machines you keep and a fresh server:
 revocation closes the door, it does not empty the room.
 
+### Reclaiming space
+
+The server keeps every object it is sent, so something pushed once by mistake (a
+render, a dataset) stays there after it leaves every snapshot. Collection fixes
+that:
+
+```
+weft remote gc --join <secret>              # report what would go
+weft remote gc --join <secret> --apply      # move it to the server's trash
+```
+
+The server cannot read a snapshot, so it cannot work out what a head needs. Each
+push tells it instead: the full list of ids the head depends on, which a push
+already sends to find out what is missing, is kept as that head's **pins**. What no
+current head pins, and no head superseded within the retention window (14 days),
+is collected.
+
+- **A head pushed by an older client blocks collection entirely.** Nobody declared
+  what it needs, and "unknown" is not "nothing". `weft remote machines` shows who
+  needs to push again.
+- **Nothing is deleted outright.** Objects are moved into `trash/<stamp>` on the
+  server and deleted after 7 days; moving them back undoes a sweep. The nightly
+  backup should archive `objects/` only, so it shrinks the next night.
+- **Pushes in flight are safe.** Whatever a push was told is already there stays
+  until its head lands, and every head commit checks that all of its objects exist.
+
+Windows are server settings: `Weft__RetainDays`, `Weft__GraceHours`,
+`Weft__SessionTtlHours`, `Weft__TrashDays`. Reasoning in [docs/gc.md](docs/gc.md).
+
 ## Uncommitted work
 
 The failure this tool was built for is a branch that lives on one disk, that the
@@ -385,6 +414,7 @@ teaches people to reach for a bypass, and then it protects nothing.
 - [x] Uncommitted work capture and transfer
 - [x] TUI
 - [x] Self-update
+- [x] Server-side garbage collection
 
 ## Contributing
 

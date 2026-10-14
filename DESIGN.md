@@ -192,6 +192,13 @@ blob matches the name it is filed under, so allowing a rewrite would let any
 enrolled machine replace content every other machine depends on. First writer of
 a name wins.
 
+Immutable is not permanent. An object no head needs any more can be collected
+(`weft remote gc`), and a later push that needs it creates it afresh under the same
+name. What it can never be is *different*. Since the server cannot read a snapshot,
+what a head needs is declared by the push that published it: the push opens a
+session, every id it asks about is recorded, and when the head lands those ids
+become its pins. Reasoning in `docs/gc.md`.
+
 > The name is claimed with an exclusive create (`O_CREAT|O_EXCL`), not with a
 > rename. `File.Move(overwrite: false)` on Unix tests for the destination and then
 > calls `rename(2)`, which silently replaces it: measured, 5 of 12 concurrent
@@ -399,7 +406,8 @@ plaintext proves it is the chunk that was actually asked for.
 
 - **Not a git replacement.** git owns history inside a repository. weft owns what
   is between and around repositories.
-- **Not a backup tool.** Snapshots serve synchronisation. Retention is bounded.
+- **Not a backup tool.** Snapshots serve synchronisation. Retention is bounded: the
+  server collects what no head within its retention window needs (`docs/gc.md`).
 - **Not real-time collaborative editing.** The unit is a file, not a keystroke.
 - **Not a general file synchroniser.** It is tuned for source trees: many small
   text files, huge regenerable subtrees, and git repositories that must be
@@ -410,7 +418,10 @@ plaintext proves it is the chunk that was actually asked for.
 ## 9. Invariants a change must not break
 
 1. weft never writes into a git working tree without an explicit command.
-2. No snapshotted content is ever unreachable.
+2. No snapshotted content is ever unreachable while a machine's current head, or a
+   head superseded within the retention window, needs it. Every local store keeps
+   everything it holds; only the server collects, and only what its pins say no
+   head needs (see `docs/gc.md`).
 3. A `never` rule cannot be overridden.
 4. Ignored directories are never descended into.
 5. A conflicted file is never written half-merged to disk.

@@ -10,7 +10,8 @@ public sealed record Machine(
     string Id, string Name, string Platform,
     DateTimeOffset EnrolledUtc, DateTimeOffset LastSeenUtc,
     string? Head, DateTimeOffset? HeadUpdatedUtc,
-    DateTimeOffset? RevokedUtc = null);
+    DateTimeOffset? RevokedUtc = null,
+    bool Pinned = false);
 
 /// <summary>
 /// Everything the server keeps: a small metadata database, and opaque blobs.
@@ -28,17 +29,32 @@ public sealed record Machine(
 /// request can replace it. A client that receives a wrong object detects it on
 /// decryption, because the name is authenticated and the content re-hashed.</para>
 /// </remarks>
-public sealed class ServerStore
+public sealed partial class ServerStore
 {
     private readonly string _connectionString;
     private readonly string _objectsDir;
     private readonly string _tempDir;
+    private readonly string _trashDir;
+
+    /// <summary>
+    /// Serialises everything that decides whether an object is still wanted
+    /// against the sweep that moves unwanted ones away.
+    /// </summary>
+    /// <remarks>
+    /// Held by a head commit, by the presence answers a push relies on, and by the
+    /// whole garbage collection. Without it a push can be told "already there"
+    /// about an object the sweep is about to move, and then publish a head that
+    /// names it. Pushes wait for a sweep, never the other way round, and a sweep
+    /// of a store this size takes a second or two.
+    /// </remarks>
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     public ServerStore(string dataDir)
     {
         Directory.CreateDirectory(dataDir);
         _objectsDir = Path.Combine(dataDir, "objects");
         _tempDir = Path.Combine(dataDir, "tmp");
+        _trashDir = Path.Combine(dataDir, "trash");
         Directory.CreateDirectory(_objectsDir);
         Directory.CreateDirectory(_tempDir);
 
@@ -89,6 +105,37 @@ public sealed class ServerStore
               key         TEXT PRIMARY KEY,
               value       TEXT NOT NULL
             );
+
+            -- What each head needs, as declared by the machine that pushed it.
+            -- Keyed by head rather than by machine: the set is a function of the
+            -- snapshot, so re-pushing an unchanged head changes nothing.
+            CREATE TABLE IF NOT EXISTS pins (
+              head    TEXT NOT NULL,
+              object  TEXT NOT NULL,
+              PRIMARY KEY (head, object)
+            ) WITHOUT ROWID;
+
+            -- Every head a machine has published, so a superseded one can be
+            -- kept for the retention window instead of vanishing on the next push.
+            CREATE TABLE IF NOT EXISTS head_history (
+              machine_id      TEXT NOT NULL,
+              head            TEXT NOT NULL,
+              set_utc         INTEGER NOT NULL,
+              superseded_utc  INTEGER,
+              PRIMARY KEY (machine_id, head, set_utc)
+            );
+
+            CREATE TABLE IF NOT EXISTS push_sessions (
+              id           TEXT PRIMARY KEY,
+              machine_id   TEXT NOT NULL,
+              created_utc  INTEGER NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS session_ids (
+              session  TEXT NOT NULL,
+              object   TEXT NOT NULL,
+              PRIMARY KEY (session, object)
+            ) WITHOUT ROWID;
             """;
         cmd.ExecuteNonQuery();
 
@@ -182,7 +229,8 @@ public sealed class ServerStore
         using var cx = Open();
         using var cmd = cx.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, platform, enrolled_utc, last_seen_utc, head, head_updated_utc, revoked_utc
+            SELECT id, name, platform, enrolled_utc, last_seen_utc, head, head_updated_utc, revoked_utc,
+                   EXISTS (SELECT 1 FROM pins p WHERE p.head = machines.head)
             FROM machines WHERE id = $id
             """;
         cmd.Parameters.AddWithValue("$id", id);
@@ -196,7 +244,8 @@ public sealed class ServerStore
         using var cx = Open();
         using var cmd = cx.CreateCommand();
         cmd.CommandText = """
-            SELECT id, name, platform, enrolled_utc, last_seen_utc, head, head_updated_utc, revoked_utc
+            SELECT id, name, platform, enrolled_utc, last_seen_utc, head, head_updated_utc, revoked_utc,
+                   EXISTS (SELECT 1 FROM pins p WHERE p.head = machines.head)
             FROM machines ORDER BY name
             """;
 
@@ -237,13 +286,93 @@ public sealed class ServerStore
     }
 
     /// <summary>Moves one machine's pointer. Callers must already have checked it is their own.</summary>
+    /// <remarks>
+    /// The path a client without push sessions takes. Nothing says what the new
+    /// head needs, so unless some session already pinned that exact snapshot the
+    /// machine reads as unpinned, and garbage collection refuses to run until it
+    /// pushes with a client that declares its pins.
+    /// </remarks>
     public void SetHead(string machineId, string snapshot)
     {
-        using var cx = Open();
+        _gate.Wait();
+        try
+        {
+            using var cx = Open();
+            using var tx = cx.BeginTransaction();
+            MoveHead(cx, tx, machineId, snapshot, DateTimeOffset.UtcNow);
+            tx.Commit();
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>Moves the pointer and keeps the history the retention window reads.</summary>
+    private static void MoveHead(
+        SqliteConnection cx, SqliteTransaction tx, string machineId, string snapshot, DateTimeOffset now)
+    {
+        string? oldHead = null;
+        long? oldSet = null;
+        using (var read = cx.CreateCommand())
+        {
+            read.Transaction = tx;
+            read.CommandText = "SELECT head, head_updated_utc FROM machines WHERE id = $id";
+            read.Parameters.AddWithValue("$id", machineId);
+            using var r = read.ExecuteReader();
+            if (r.Read())
+            {
+                oldHead = r.IsDBNull(0) ? null : r.GetString(0);
+                oldSet = r.IsDBNull(1) ? null : r.GetInt64(1);
+            }
+        }
+
+        if (oldHead is not null && oldHead != snapshot)
+        {
+            using var close = cx.CreateCommand();
+            close.Transaction = tx;
+            close.CommandText = """
+                UPDATE head_history SET superseded_utc = $now
+                WHERE machine_id = $id AND head = $old AND superseded_utc IS NULL
+                """;
+            close.Parameters.AddWithValue("$now", now.ToUnixTimeMilliseconds());
+            close.Parameters.AddWithValue("$id", machineId);
+            close.Parameters.AddWithValue("$old", oldHead);
+
+            // A head set before history was recorded has no open row. Writing one
+            // now, already superseded, gives it the same retention as any other
+            // instead of letting the first push after an upgrade erase it.
+            if (close.ExecuteNonQuery() == 0)
+            {
+                using var backfill = cx.CreateCommand();
+                backfill.Transaction = tx;
+                backfill.CommandText = """
+                    INSERT OR IGNORE INTO head_history (machine_id, head, set_utc, superseded_utc)
+                    VALUES ($id, $old, $set, $now)
+                    """;
+                backfill.Parameters.AddWithValue("$id", machineId);
+                backfill.Parameters.AddWithValue("$old", oldHead);
+                backfill.Parameters.AddWithValue("$set", oldSet ?? now.ToUnixTimeMilliseconds());
+                backfill.Parameters.AddWithValue("$now", now.ToUnixTimeMilliseconds());
+                backfill.ExecuteNonQuery();
+            }
+        }
+
+        if (oldHead != snapshot)
+        {
+            using var open = cx.CreateCommand();
+            open.Transaction = tx;
+            open.CommandText = """
+                INSERT OR IGNORE INTO head_history (machine_id, head, set_utc) VALUES ($id, $head, $now)
+                """;
+            open.Parameters.AddWithValue("$id", machineId);
+            open.Parameters.AddWithValue("$head", snapshot);
+            open.Parameters.AddWithValue("$now", now.ToUnixTimeMilliseconds());
+            open.ExecuteNonQuery();
+        }
+
         using var cmd = cx.CreateCommand();
+        cmd.Transaction = tx;
         cmd.CommandText = "UPDATE machines SET head = $head, head_updated_utc = $now WHERE id = $id";
         cmd.Parameters.AddWithValue("$head", snapshot);
-        cmd.Parameters.AddWithValue("$now", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.Parameters.AddWithValue("$now", now.ToUnixTimeMilliseconds());
         cmd.Parameters.AddWithValue("$id", machineId);
         cmd.ExecuteNonQuery();
     }
@@ -288,6 +417,35 @@ public sealed class ServerStore
     private string PathOf(string id) => Path.Combine(_objectsDir, id[..2], id[2..]);
 
     public bool HasObject(string id) => File.Exists(PathOf(id));
+
+    /// <summary>
+    /// Which of these the server lacks, for a client that pushes without a session.
+    /// </summary>
+    /// <remarks>
+    /// Every object reported present has its modification time refreshed. The
+    /// client is about to publish a head that names it without sending it, and
+    /// nothing else tells the sweep so: the grace window, which reads that time,
+    /// is what keeps the object until the head lands.
+    /// </remarks>
+    public IReadOnlyList<string> MissingTouchingPresent(IEnumerable<string> ids)
+    {
+        _gate.Wait();
+        try
+        {
+            var missing = new List<string>();
+            var now = DateTime.UtcNow;
+            foreach (var id in ids)
+            {
+                var p = PathOf(id);
+                if (!File.Exists(p)) { missing.Add(id); continue; }
+
+                try { File.SetLastWriteTimeUtc(p, now); }
+                catch (IOException) { missing.Add(id); }
+            }
+            return missing;
+        }
+        finally { _gate.Release(); }
+    }
 
     /// <summary>
     /// Stores a blob under a name, if that name is free.
@@ -400,8 +558,10 @@ public sealed class ServerStore
         DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(4)),
         r.IsDBNull(5) ? null : r.GetString(5),
         r.IsDBNull(6) ? null : DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(6)),
-        r.IsDBNull(7) ? null : DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(7)));
+        r.IsDBNull(7) ? null : DateTimeOffset.FromUnixTimeMilliseconds(r.GetInt64(7)),
+        r.GetInt64(8) != 0);
 
     public HeadEntry ToHead(Machine m) => new(
-        m.Id, m.Name, m.Platform, m.Head, m.HeadUpdatedUtc, m.LastSeenUtc, m.RevokedUtc);
+        m.Id, m.Name, m.Platform, m.Head, m.HeadUpdatedUtc, m.LastSeenUtc, m.RevokedUtc,
+        m.Head is null ? null : m.Pinned);
 }

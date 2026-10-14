@@ -62,11 +62,63 @@ public sealed class RemoteClient : IDisposable
         return (await r.Content.ReadFromJsonAsync(WireJson.Default.HeadsResponse, ct).ConfigureAwait(false))!.Heads;
     }
 
-    public async Task SetHeadAsync(RemoteId snapshot, CancellationToken ct = default)
+    /// <param name="session">The push session that named this head's objects, or null without one.</param>
+    public async Task SetHeadAsync(RemoteId snapshot, string? session = null, CancellationToken ct = default)
     {
         using var r = await _http.PutAsJsonAsync($"{_base}/v1/head",
-            new SetHeadRequest(snapshot.ToString()), WireJson.Default.SetHeadRequest, ct).ConfigureAwait(false);
+            new SetHeadRequest(snapshot.ToString(), session), WireJson.Default.SetHeadRequest, ct).ConfigureAwait(false);
         await ThrowIfFailedAsync(r, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Opens a push session, or returns null when the server predates them.
+    /// </summary>
+    /// <remarks>
+    /// A server without sessions answers 404 on a route it does not know, and the
+    /// push then goes the old way. Refusing instead would make upgrading the
+    /// clients depend on upgrading the server first, for a feature only the
+    /// server benefits from.
+    /// </remarks>
+    public async Task<string?> BeginPushAsync(CancellationToken ct = default)
+    {
+        using var r = await _http.PostAsync($"{_base}/v1/push", null, ct).ConfigureAwait(false);
+        if (r.StatusCode == HttpStatusCode.NotFound) return null;
+
+        await ThrowIfFailedAsync(r, ct).ConfigureAwait(false);
+        return (await r.Content.ReadFromJsonAsync(WireJson.Default.PushSessionResponse, ct).ConfigureAwait(false))!.Session;
+    }
+
+    /// <summary>
+    /// Tells a push session what the head needs, and learns which of it the server lacks.
+    /// </summary>
+    /// <remarks>Batched like <see cref="MissingAsync"/>, for the same reasons.</remarks>
+    public async Task<IReadOnlyList<RemoteId>> SessionMissingAsync(
+        string session, IReadOnlyCollection<RemoteId> ids, CancellationToken ct = default)
+    {
+        const int batch = 5000;
+        var missing = new List<RemoteId>();
+
+        foreach (var page in ids.Chunk(batch))
+        {
+            using var r = await _http.PostAsJsonAsync($"{_base}/v1/push/{Uri.EscapeDataString(session)}/ids",
+                new MissingRequest(page.Select(i => i.ToString()).ToList()),
+                WireJson.Default.MissingRequest, ct).ConfigureAwait(false);
+
+            await ThrowIfFailedAsync(r, ct).ConfigureAwait(false);
+            var body = await r.Content.ReadFromJsonAsync(WireJson.Default.MissingResponse, ct).ConfigureAwait(false);
+            missing.AddRange(body!.Missing.Select(x => RemoteId.Parse(x)));
+        }
+
+        return missing;
+    }
+
+    /// <summary>Asks the server to collect what no head needs. Carries the join secret, like revoke.</summary>
+    public async Task<GcResponse> GcAsync(GcRequest request, CancellationToken ct = default)
+    {
+        using var r = await _http.PostAsJsonAsync($"{_base}/v1/gc", request,
+            WireJson.Default.GcRequest, ct).ConfigureAwait(false);
+        await ThrowIfFailedAsync(r, ct).ConfigureAwait(false);
+        return (await r.Content.ReadFromJsonAsync(WireJson.Default.GcResponse, ct).ConfigureAwait(false))!;
     }
 
     /// <summary>

@@ -14,6 +14,12 @@ public sealed record PushResult
     public required long BytesUploaded { get; init; }
     public required long ElapsedMs { get; init; }
     public required bool AlreadyCurrent { get; init; }
+
+    /// <summary>
+    /// False when the server predates push sessions, so it was not told what this
+    /// head needs and cannot collect anything until it is.
+    /// </summary>
+    public required bool Pinned { get; init; }
 }
 
 public sealed record PullResult
@@ -64,7 +70,13 @@ public sealed class SyncEngine(
         var needed = Reachable(head);
         var byRemote = needed.ToDictionary(c => RemoteId.Of(key, c), c => c);
 
-        var missing = await client.MissingAsync(byRemote.Keys, ct).ConfigureAwait(false);
+        // The session is what lets the server keep exactly what this head needs and
+        // collect the rest. Every id goes through it, present or not: the full set
+        // is what becomes the head's pins.
+        var session = await client.BeginPushAsync(ct).ConfigureAwait(false);
+        var missing = session is null
+            ? await client.MissingAsync(byRemote.Keys, ct).ConfigureAwait(false)
+            : await client.SessionMissingAsync(session, byRemote.Keys, ct).ConfigureAwait(false);
 
         var uploaded = 0;
         long bytes = 0;
@@ -82,7 +94,7 @@ public sealed class SyncEngine(
             bytes += blob.Length;
         }
 
-        await client.SetHeadAsync(RemoteId.Of(key, head), ct).ConfigureAwait(false);
+        await client.SetHeadAsync(RemoteId.Of(key, head), session, ct).ConfigureAwait(false);
 
         // Written only after the pointer moved, so it records what the server
         // really has rather than what we intended to send.
@@ -96,6 +108,7 @@ public sealed class SyncEngine(
             BytesUploaded = bytes,
             ElapsedMs = sw.ElapsedMilliseconds,
             AlreadyCurrent = uploaded == 0,
+            Pinned = session is not null,
         };
     }
 

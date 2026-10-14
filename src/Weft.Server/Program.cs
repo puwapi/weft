@@ -13,6 +13,20 @@ var maxObjectBytes = long.TryParse(builder.Configuration["Weft:MaxObjectBytes"],
     ? m
     : 64L * 1024 * 1024 + ChunkCipher.Overhead;
 
+// Garbage collection. Each window is in its own unit because that is how an
+// operator thinks about it: keep superseded heads for days, spare fresh objects
+// for hours. See docs/gc.md for what each one protects.
+static double Setting(IConfiguration c, string key, double fallback)
+    => double.TryParse(c[key], System.Globalization.CultureInfo.InvariantCulture, out var v) && v >= 0 ? v : fallback;
+
+var gcDefaults = new GcOptions
+{
+    Retain = TimeSpan.FromDays(Setting(builder.Configuration, "Weft:RetainDays", 14)),
+    Grace = TimeSpan.FromHours(Setting(builder.Configuration, "Weft:GraceHours", 24)),
+    SessionTtl = TimeSpan.FromHours(Setting(builder.Configuration, "Weft:SessionTtlHours", 24)),
+    TrashKeep = TimeSpan.FromDays(Setting(builder.Configuration, "Weft:TrashDays", 7)),
+};
+
 builder.Services.AddSingleton(new ServerStore(dataDir));
 
 var app = builder.Build();
@@ -166,6 +180,40 @@ app.MapGet("/v1/heads", (HttpContext ctx) =>
         WireJson.Default.HeadsResponse);
 });
 
+// A push opens a session first. Every id it then asks about is recorded, and when
+// the head lands those ids become what the head pins: the one thing that lets a
+// server that cannot read its objects tell which ones are still needed.
+app.MapPost("/v1/push", (HttpContext ctx) =>
+{
+    var me = Authenticate(ctx);
+    if (me is null) return Error(StatusCodes.Status401Unauthorized, "unauthenticated", "Bad or missing token.");
+    if (!WriteAllowed(ctx, out var refusal)) return refusal!;
+
+    return Results.Json(new PushSessionResponse(store.BeginPush(me.Id)), WireJson.Default.PushSessionResponse);
+});
+
+app.MapPost("/v1/push/{session}/ids", async (string session, HttpContext ctx) =>
+{
+    var me = Authenticate(ctx);
+    if (me is null) return Error(StatusCodes.Status401Unauthorized, "unauthenticated", "Bad or missing token.");
+    if (!WriteAllowed(ctx, out var refusal)) return refusal!;
+
+    var (req, bodyError) = await ReadBodyAsync(ctx, WireJson.Default.MissingRequest);
+    if (bodyError is not null) return bodyError;
+
+    if (req!.Ids.Count > 10_000)
+        return Error(StatusCodes.Status400BadRequest, "too_many",
+            "Send at most 10 000 ids at a time.");
+
+    var ids = req.Ids.Where(id => RemoteId.TryParse(id, out _)).ToList();
+    var missing = store.AddToSession(me.Id, session, ids);
+
+    return missing is null
+        ? Error(StatusCodes.Status404NotFound, "no_such_session",
+            "That push session does not exist, or it expired. Push again.")
+        : Results.Json(new MissingResponse(missing), WireJson.Default.MissingResponse);
+});
+
 app.MapPut("/v1/head", async (HttpContext ctx) =>
 {
     var me = Authenticate(ctx);
@@ -177,14 +225,30 @@ app.MapPut("/v1/head", async (HttpContext ctx) =>
     if (!RemoteId.TryParse(req!.Snapshot, out _))
         return Error(StatusCodes.Status400BadRequest, "bad_request", "Expected an object id.");
 
+    // The machine comes from the token, never from the request. This is the whole
+    // of "a machine writes only within its own namespace": there is no parameter
+    // that could name another machine's pointer.
+    if (req.Session is not null)
+    {
+        var outcome = store.CommitHead(me.Id, req.Session, req.Snapshot);
+        return outcome.Status switch
+        {
+            CommitStatus.Committed => Results.NoContent(),
+            CommitStatus.NoSuchSession => Error(StatusCodes.Status404NotFound, "no_such_session",
+                "That push session does not exist, or it expired. Push again."),
+            CommitStatus.SnapshotNotInSession => Error(StatusCodes.Status409Conflict, "snapshot_missing",
+                "That snapshot was not part of this push. Push its objects before moving the pointer."),
+            _ => Error(StatusCodes.Status409Conflict, "objects_missing",
+                $"{outcome.Missing} object(s) this head needs are not on the server. Push again: "
+                + "moving the pointer now would leave other machines following it into nothing."),
+        };
+    }
+
     if (!store.HasObject(req.Snapshot))
         return Error(StatusCodes.Status409Conflict, "snapshot_missing",
             "That snapshot is not on the server. Push its objects before moving the pointer, "
             + "or other machines will follow a pointer into nothing.");
 
-    // The machine comes from the token, never from the request. This is the whole
-    // of "a machine writes only within its own namespace": there is no parameter
-    // that could name another machine's pointer.
     store.SetHead(me.Id, req.Snapshot);
     return Results.NoContent();
 });
@@ -200,7 +264,9 @@ app.MapPost("/v1/objects/missing", async (HttpContext ctx) =>
         return Error(StatusCodes.Status400BadRequest, "too_many",
             "Ask about at most 10 000 objects at a time.");
 
-    var missing = req!.Ids.Where(id => RemoteId.TryParse(id, out _) && !store.HasObject(id)).ToList();
+    // The path of a client without push sessions. Present objects are touched, so
+    // the grace window keeps them until the head that names them lands.
+    var missing = store.MissingTouchingPresent(req!.Ids.Where(id => RemoteId.TryParse(id, out _)));
     return Results.Json(new MissingResponse(missing), WireJson.Default.MissingResponse);
 });
 
@@ -238,6 +304,42 @@ app.MapGet("/v1/objects/{id}", (string id, HttpContext ctx) =>
     return stream is null
         ? Error(StatusCodes.Status404NotFound, "not_found", "No such object.")
         : Results.Stream(stream, "application/octet-stream");
+});
+
+// Guarded by the join secret like revoke, and for the same reason: a stolen
+// laptop holds a token, not the operator's credential. Dry run unless asked.
+app.MapPost("/v1/gc", async (HttpContext ctx) =>
+{
+    var (req, bodyError) = await ReadBodyAsync(ctx, WireJson.Default.GcRequest);
+    if (bodyError is not null) return bodyError;
+
+    if (!JoinSecretOk(req!.JoinSecret))
+        return Error(StatusCodes.Status403Forbidden, "bad_join_secret", "Join secret rejected.");
+
+    if (req.RetainDays is < 0)
+        return Error(StatusCodes.Status400BadRequest, "bad_request", "retainDays cannot be negative.");
+
+    var options = gcDefaults with
+    {
+        Apply = req.Apply,
+        Retain = req.RetainDays is int days ? TimeSpan.FromDays(days) : gcDefaults.Retain,
+    };
+
+    var report = store.CollectGarbage(options);
+
+    if (report.Applied)
+        app.Logger.LogInformation(
+            "gc: {Count} object(s), {Bytes} bytes moved to trash/{Stamp}; {Purged} old stamp(s) purged",
+            report.Candidates, report.CandidateBytes, report.Stamp ?? "-", report.PurgedStamps);
+
+    return Results.Json(new GcResponse(
+        report.Refused,
+        report.Unpinned.Select(m => new GcMachine(m.Id, m.Name)).ToList(),
+        options.Retain.TotalDays,
+        report.LiveHeads, report.UnretainableHeads, report.LiveObjects, report.KeptYoung,
+        report.Candidates, report.CandidateBytes,
+        report.Applied, report.Stamp, report.PurgedStamps,
+        options.TrashKeep.TotalDays), WireJson.Default.GcResponse);
 });
 
 app.Logger.LogInformation(
