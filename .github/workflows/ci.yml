@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Une nouvelle poussee sur la meme reference rend la CI en cours caduque. Sans ce
+# groupe, chaque poussee empile un run de plus, et la CI de commits que plus
+# personne ne lira occupe les runners partages par toute l'organisation.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     # Built on all three, because the bugs this catches only exist on one of them.
